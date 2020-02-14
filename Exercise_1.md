@@ -7,11 +7,11 @@ Data Visualization: Flights at ABIA
 
 <font size="10"> Flight Cancellation Patterns </font>
 
-![](Exercise_1_files/figure-markdown_github/unnamed-chunk-2-1.png)![](Exercise_1_files/figure-markdown_github/unnamed-chunk-2-2.png)![](Exercise_1_files/figure-markdown_github/unnamed-chunk-2-3.png)
+![](Exercise_1_files/figure-markdown_strict/unnamed-chunk-2-1.png)![](Exercise_1_files/figure-markdown_strict/unnamed-chunk-2-2.png)![](Exercise_1_files/figure-markdown_strict/unnamed-chunk-2-3.png)
 
 <font size="10"> Flight Delay Patterns </font>
 
-![](Exercise_1_files/figure-markdown_github/unnamed-chunk-3-1.png)![](Exercise_1_files/figure-markdown_github/unnamed-chunk-3-2.png)![](Exercise_1_files/figure-markdown_github/unnamed-chunk-3-3.png)
+![](Exercise_1_files/figure-markdown_strict/unnamed-chunk-3-1.png)![](Exercise_1_files/figure-markdown_strict/unnamed-chunk-3-2.png)![](Exercise_1_files/figure-markdown_strict/unnamed-chunk-3-3.png)
 
 ------------------------------------------------------------------------
 
@@ -34,23 +34,19 @@ a 40-year-old with a rate of 135, or a 60-year-old with a rate of 112?*
 
 ------------------------------------------------------------------------
 
-``` r
-ggplot(data=creatinine, aes(age, creatclear)) +
-  geom_point() +
-  geom_smooth(method="lm", color="indianred4",se= F)+
-  labs(title = "Creatinine Clearance Rate vs Age")
-```
+    ggplot(data=creatinine, aes(age, creatclear)) +
+      geom_point() +
+      geom_smooth(method="lm", color="indianred4",se= F)+
+      labs(title = "Creatinine Clearance Rate vs Age")
 
-![](Exercise_1_files/figure-markdown_github/unnamed-chunk-5-1.png)
+![](Exercise_1_files/figure-markdown_strict/unnamed-chunk-5-1.png)
 
 **1. What creatinine clearance rate should we expect, on average, for a
 55-year-old?**
 
-``` r
-lm1 = lm(creatclear ~ age, data= creatinine)
-new_data= data.frame(age = 55)
-predict(lm1, new_data)
-```
+    lm1 = lm(creatclear ~ age, data= creatinine)
+    new_data= data.frame(age = 55)
+    predict(lm1, new_data)
 
     ##       1 
     ## 113.723
@@ -62,9 +58,7 @@ rate of 113.723 ml/minute.
 
 The rate of change is simply the coefficient of the age variable.
 
-``` r
-coef(lm1)
-```
+    coef(lm1)
 
     ## (Intercept)         age 
     ## 147.8129158  -0.6198159
@@ -76,22 +70,18 @@ decrease by 0.62 ml/minute. (0.62 ml/minute per year)
 age: a 40-year-old with a rate of 135, or a 60-year-old with a rate of
 112?**
 
-``` r
-pred40=predict(lm1, data.frame(age= 40))
-pred60=predict(lm1, data.frame(age= 60))
-obs40=135
-obs60=112
-error40= obs40-pred40
-error60= obs60-pred60
-error40
-```
+    pred40=predict(lm1, data.frame(age= 40))
+    pred60=predict(lm1, data.frame(age= 60))
+    obs40=135
+    obs60=112
+    error40= obs40-pred40
+    error60= obs60-pred60
+    error40
 
     ##        1 
     ## 11.97972
 
-``` r
-error60
-```
+    error60
 
     ##        1 
     ## 1.376035
@@ -118,7 +108,7 @@ and 350,000sqft in economic areas similar to Austin (employment growth
 between 2 and 10 percent). Next, I deleted potential outliers that could
 skew the data.
 
-![](Exercise_1_files/figure-markdown_github/unnamed-chunk-10-1.png)![](Exercise_1_files/figure-markdown_github/unnamed-chunk-10-2.png)
+![](Exercise_1_files/figure-markdown_strict/unnamed-chunk-10-1.png)![](Exercise_1_files/figure-markdown_strict/unnamed-chunk-10-2.png)
 
 These two pictures confirm the economic value behind green buildings
 suggested by the “data guru”. While I do not agree with the means he
@@ -144,21 +134,17 @@ Since Q(P) represents the demand curve, I used a log model to make use
 of the power law. This seems like a good fit, because the log
 transformation resembles a linear trend.
 *Q*(*P*) = *α**P*<sup>*β*</sup>
-![](Exercise_1_files/figure-markdown_github/unnamed-chunk-11-1.png)
+![](Exercise_1_files/figure-markdown_strict/unnamed-chunk-11-1.png)
 
-``` r
-lm1= lm(log(sales)~log(price), milk)
-#coefficients of log model
-coef(lm1)
-```
+    lm1= lm(log(sales)~log(price), milk)
+    #coefficients of log model
+    coef(lm1)
 
     ## (Intercept)  log(price) 
     ##    4.720604   -1.618578
 
-``` r
-alpha= exp(coef(lm1)[1])
-beta= coef(lm1)[2]
-```
+    alpha= exp(coef(lm1)[1])
+    beta= coef(lm1)[2]
 
 The coefficients of this model turned out to be *α* ≈ 112.24 and
 *β* ≈  − 1.62 Thus,
@@ -168,11 +154,9 @@ by setting the first derivate equal to 0 and solving for P:
 $$\\frac{\\partial Profits}{\\partial P}=\\frac{\\partial}{\\partial P}\[(P-1)\*112.24\*P^{-1.62}\]=0$$
 *P* ≈ $2.61
 
-``` r
-curve((x-1)*alpha*x^(beta), from=2, to=4)
-```
+    curve((x-1)*alpha*x^(beta), from=2, to=4)
 
-![](Exercise_1_files/figure-markdown_github/unnamed-chunk-13-1.png)
+![](Exercise_1_files/figure-markdown_strict/unnamed-chunk-13-1.png)
 
 Given that the cost is equal to $1, the profit maximizing price is
 $2.61. At this price, the net profit is equal to:
