@@ -1,0 +1,1240 @@
+---
+title: 'SDS323: Exercise 2'
+author: "Max Kutschinski (mwk556)"
+date: "03/13/2020"
+output: 
+  pdf_document:
+    fig_caption: no
+  html_document: default
+theme: cerulean
+header-includes:
+    - \usepackage{caption}
+---
+
+\captionsetup[table]{labelformat=empty}
+
+<style type="text/css">
+
+body{ /* Normal  */
+      font-size: 12px;
+  }
+td {  /* Table  */
+  font-size: 12px;
+}
+h1.title {
+  font-size: 36px;
+  color: #8b3a3a;
+}
+h1 { /* Header 1 */
+  font-size: 26px;
+  color: #3d3d3d;
+}
+h2 { /* Header 2 */
+    font-size: 20px;
+  color: #3d3d3d;
+}
+h3 { /* Header 3 */
+  font-size: 16px;
+  color: #3d3d3d;
+}
+h4 { /* Header 4 */
+  font-size: 14px;
+  color: #3d3d3d;
+}
+code.r{ /* Code block */
+    font-size: 12px;
+}
+pre { /* Code block - determines code spacing between lines */
+    font-size: 14px;
+}
+</style>
+  
+  
+
+
+
+ 
+---
+
+```{r setup, include= FALSE}
+knitr::opts_chunk$set(echo = T)
+
+```
+
+
+# KNN practice
+
+
+
+
+###  **Introduction**
+
+The goal of this exercise is to predict the price of different Mercedes S-Class vehicles using K-nearest-neighbors.
+For websites such as Cars.com and Truecar, providing accurate pricing information to consumers has traditionally been a notoroiously difficult case when it comes to the Mercedes S-Class. This is largely due to the fact that there is a wide range of sub-models that are all labeled S-Class. For this particular exercise, the focus will be on two different trim levels (350 and 65 AMG), as well as one feature variable (mileage). 
+
+### **Data and Methods**
+
+The dataset contains data on over 29,000 Mercedes S-Class vehicles. Since we are only interested in looking at two different trim levels, two subsets will be extracted from the full dataset, and the 350's and the 65 AMG's will be treated as two separate datasets. The target variable is price, and the feature to be analyzed per trim level is mileage. 
+
+```{r, include=F, message=FALSE, warning=FALSE}
+library(mosaic)
+library(tidyverse)
+library(FNN)
+library(ggplot2)
+library(foreach)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(sjPlot)
+library(sjmisc)
+library(sjlabelled)
+
+
+sclass = read.csv('~/GitHub/SDS323/data/sclass.csv')
+data(SaratogaHouses)
+
+#########Functions
+rmse = function(y, ypred) {
+  sqrt(mean(data.matrix((y-ypred)^2)))
+}
+
+revlog_trans <- function(base = exp(1)) {
+  require(scales)
+  trans <- function(x){
+    -log(x, base)
+  }
+  inv <- function(x){
+    base^(-x)
+  }
+  scales::trans_new(paste("revlog-", base, sep = ""),
+                    trans,
+                    inv,  
+                    log_breaks(base = base), 
+                    domain = c(1e-100, Inf) 
+  )
+}
+
+#  2 trim levels: 350 and 65 AMG
+sclass350 = subset(sclass, trim == '350')
+sclass65AMG = subset(sclass, trim == '65 AMG')
+
+
+```
+
+Table 1 shows some basic summary statistics of the mileage on the car for each of the two trim levels. The datset consisting of all the S-Class 350 models contains 416 observations, while the S-Class 65 AMG dataset contains 292 oberservations. 
+
+```{r, echo=F}
+
+
+x= sclass%>%
+  filter(trim == '350' | trim == '65 AMG')%>%
+  group_by(trim)%>%
+  summarize(count = n(), min= min(mileage), max= max(mileage), mean = round(mean(mileage), 0), median= median(mileage))
+
+kable(x, format.args = list(big.mark =","), caption = "Table 1: Summary stats (mileage)")%>%
+  kable_styling(bootstrap_options= "striped", full_width = F, latex_options = 'hold_position')%>%
+  column_spec(1, bold=T)
+
+```
+
+To analyze the data, the same procedure will be followed for each trim level:
+
+1. The data will be split into a training and a testing set (80/20) in order to avoid overfitting. 
+2. K-nearest-neighbors will be run for many different values of K, starting at K=2. For each value of K, the model will be fit to the training set and predictions will be made on the test set. 
+3.  The out-of-sample root mean-squared error (RMSE) will be calculated for each value of K.
+
+When measuring out of sample performance, there exists random variation due to the particular choice of data points that end up in the train/test split. Thus, both KNN modes will be compared using their average out-of-sample RMSE and K over multiple different train/test splits. To be specific, each K value will be evaluated over 100 different train/test splits. 
+
+
+### **Results**
+
+
+#### **(i) Mercedes S-Class 350**
+
+
+
+
+```{r, echo=F, results='asis', message=FALSE, warning=FALSE}
+
+
+
+########## 350
+
+N = nrow(sclass350)
+N_train = floor(0.8*N)
+N_test = N - N_train
+train_ind = sample.int(N, N_train, replace=FALSE)
+D_train = sclass350[train_ind,]
+D_test = sclass350[-train_ind,]
+
+# reorder the rows of the testing set by the mileage
+D_test = arrange(D_test, mileage)
+
+# Now separate the training and testing sets into features (X) and outcome (y)
+X_train = dplyr::select(D_train, mileage)
+y_train = dplyr::select(D_train, price)
+X_test = dplyr::select(D_test, mileage)
+y_test = dplyr::select(D_test, price)
+
+```
+
+```{r, include=F, message=FALSE, warning=FALSE}
+#RMSE for different K values
+
+#knn_model2 = knn.reg(X_train, X_test, y_train, k=2)
+#(y_test, knn_model2$pred)
+knn_model2 = knn.reg(X_train, X_test, y_train, k=3)
+rmse(y_test, knn_model2$pred)
+knn_model2 = knn.reg(X_train, X_test, y_train, k=7)
+rmse(y_test, knn_model2$pred)
+knn_model2 = knn.reg(X_train, X_test, y_train, k=13)
+rmse(y_test, knn_model2$pred)
+knn_model2 = knn.reg(X_train, X_test, y_train, k=19)
+rmse(y_test, knn_model2$pred)
+knn_model2 = knn.reg(X_train, X_test, y_train, k=30)
+rmse(y_test, knn_model2$pred)
+knn_model2 = knn.reg(X_train, X_test, y_train, k=75)
+rmse(y_test, knn_model2$pred)
+knn_model2 = knn.reg(X_train, X_test, y_train, k=200)
+rmse(y_test, knn_model2$pred)
+```
+
+```{r, echo=F, message=FALSE, warning=FALSE}
+
+# plot the optimal K
+
+D_test = arrange(D_test, mileage)
+y_train = D_train$price
+y_test = D_test$price
+X_train = data.frame(mileage=jitter(D_train$mileage))
+X_test = data.frame(mileage=D_test$mileage)
+
+
+k_grid = unique(round(exp(seq(log(332), log(2), length=100))))
+rmse_grid_out = foreach(k = k_grid, .combine='c') %do% {
+rmse_vals = do(100)*{
+  train_ind = sample.int(N, N_train, replace=FALSE)
+  D_train = sclass350[train_ind,]
+  D_test = sclass350[-train_ind,]
+  D_test = arrange(D_test, mileage)
+  knn_model = knn.reg(X_train, X_test, y_train, k = k)
+  rmse(y_test, knn_model$pred)
+}
+colMeans(rmse_vals)
+}
+
+rmse_grid_out = data.frame(K = k_grid, RMSE = rmse_grid_out)
+
+ind_best = which.min(rmse_grid_out$RMSE)
+k_best = k_grid[ind_best]
+```
+Figure 1 and 2 highlight the results from analyzing the S-Class 350 models.
+Figure 1 demonstrates the RMSE for all possible K values. The graph also highlights the optimal value of K, that is the value that minimizes the RMSE. According to this plot the optimal K value is at K equal to `r k_best`. 
+
+
+```{r, echo=F, message=FALSE, warning=FALSE}
+
+p_out = ggplot(data=rmse_grid_out) + 
+  geom_path(aes(x=K, y=RMSE), size=1.5) + 
+  scale_x_continuous(trans=revlog_trans(base = 10))
+
+figure1= p_out +
+  scale_colour_manual(name="RMSE", values=c(testset="gray24", trainset='gray24')) + 
+  geom_vline(xintercept=k_best, color= 'indianred4',size=1.5)+
+  ggtitle('RMSE vs K')+ 
+  theme_bw(base_size=18)+
+  annotate(geom='text', x=k_best +10, y=23000, label = "Optimal K", color= 'indianred4')+
+  labs(tag='Figure 1',
+       caption= 'S-Class 350')+ 
+  theme(plot.title=element_text(),plot.caption=element_text(size=14, hjust=1), plot.tag = element_text(size=12, face="bold"))
+figure1
+```
+
+\pagebreak
+
+Figure 2 is an extension of Figure 1, by plotting the k-nearest neighbors model that utilizes the optimal K value found in Figure 1. 
+
+```{r, echo=F, message=FALSE, warning=FALSE}
+###plot optimal K
+p_test = ggplot(data = D_test) + 
+  geom_point(mapping = aes(x = mileage, y = price), color='gray24')+ theme_bw(base_size=18)
+
+knn_model = knn.reg(X_train, X_test, y_train, k = k_best)
+D_test$ypred = knn_model$pred
+figure2= p_test + geom_path(data=D_test, mapping = aes(x=mileage, y=ypred), color='indianred4', size=1.5)+scale_x_continuous(labels=comma)+
+  labs(title= 'Fitted K-Nearest Neighbors Model')+
+  xlab("mileage(mi)")+
+  ylab('price($)')+
+  labs(tag='Figure 2',
+       caption= 'S-Class 350')+ theme(plot.title=element_text(),plot.caption=element_text(size=14, hjust=1), plot.tag = element_text(size=12, face="bold"))
+
+figure2
+
+
+
+#############################
+```
+\pagebreak
+
+#### **(ii) Mercedes S-Class 65 AMG**
+
+```{r, echo=F, message=FALSE, warning=FALSE}
+### sclass65AMG
+
+
+N = nrow(sclass65AMG)
+N_train = floor(0.8*N)
+N_test = N - N_train
+train_ind = sample.int(N, N_train, replace=FALSE)
+D_train = sclass65AMG[train_ind,]
+D_test = sclass65AMG[-train_ind,]
+
+# reorder the rows of the testing set by the mileage
+D_test = arrange(D_test, mileage)
+
+# Now separate the training and testing sets into features (X) and outcome (y)
+X_train = dplyr::select(D_train, mileage)
+y_train = dplyr::select(D_train, price)
+X_test = dplyr::select(D_test, mileage)
+y_test = dplyr::select(D_test, price)
+```
+
+
+```{r, include=F, message=FALSE, warning=FALSE}
+#RMSE for different K values
+
+#knn_model2 = knn.reg(X_train, X_test, y_train, k=2)
+#(y_test, knn_model2$pred)
+knn_model2 = knn.reg(X_train, X_test, y_train, k=3)
+rmse(y_test, knn_model2$pred)
+knn_model2 = knn.reg(X_train, X_test, y_train, k=7)
+rmse(y_test, knn_model2$pred)
+knn_model2 = knn.reg(X_train, X_test, y_train, k=13)
+rmse(y_test, knn_model2$pred)
+knn_model2 = knn.reg(X_train, X_test, y_train, k=19)
+rmse(y_test, knn_model2$pred)
+knn_model2 = knn.reg(X_train, X_test, y_train, k=30)
+rmse(y_test, knn_model2$pred)
+knn_model2 = knn.reg(X_train, X_test, y_train, k=75)
+rmse(y_test, knn_model2$pred)
+knn_model2 = knn.reg(X_train, X_test, y_train, k=200)
+rmse(y_test, knn_model2$pred)
+```
+
+```{r, echo=F, message=FALSE, warning=FALSE}
+
+# plot the optimal fit
+####
+N = nrow(sclass65AMG)
+N_train = floor(0.8*N)
+N_test = N - N_train
+
+D_train = sclass65AMG[train_ind,]
+D_test = sclass65AMG[-train_ind,]
+
+# reorder the rows of the testing set by the mileage
+D_test = arrange(D_test, mileage)
+D_test = arrange(D_test, mileage)
+y_train = D_train$price
+y_test = D_test$price
+X_train = data.frame(mileage=jitter(D_train$mileage))
+X_test = data.frame(mileage=D_test$mileage)
+
+k_grid = unique(round(exp(seq(log(233), log(2), length=100))))
+rmse_grid_out = foreach(k = k_grid, .combine='c') %do% {
+rmse_vals = do(100)*{
+  train_ind = sample.int(N, N_train, replace=FALSE)
+  D_train = sclass65AMG[train_ind,]
+  D_test = sclass65AMG[-train_ind,]
+  D_test = arrange(D_test, mileage)  
+  knn_model = knn.reg(X_train, X_test, y_train, k = k)
+  rmse(y_test, knn_model$pred)
+}
+colMeans(rmse_vals)
+}
+
+rmse_grid_out = data.frame(K = k_grid, RMSE = rmse_grid_out)
+
+p_out = ggplot(data=rmse_grid_out) + 
+  geom_path(aes(x=K, y=RMSE), size=1.5) + 
+  scale_x_continuous(trans=revlog_trans(base = 10))
+
+ind_best = which.min(rmse_grid_out$RMSE)
+k_best1 = k_grid[ind_best]
+```
+
+Figure 3 and 4 highlight the results from analyzing the S-Class 65 AMG models.
+Here again, Figure 3 demonstrates the RMSE for all possible K values. The graph also highlights the optimal value of K, that is the value that minimizes the RMSE. According to this plot, the optimal K value is at K equal to `r k_best1`.
+
+```{r, echo=F}
+p_out +
+  scale_colour_manual(name="RMSE", values=c(testset="gray24", trainset='gray24')) + 
+  geom_vline(xintercept=k_best1, color= 'indianred4',size=1.5)+
+  ggtitle('RMSE vs K')+ 
+  theme_bw(base_size=18)+
+  annotate(geom='text', x=k_best +10, y=80000, label = "Optimal K", color= 'indianred4')+
+  labs(tag='Figure 3',
+       caption= 'S-Class 65 AMG')+ theme(plot.title=element_text(),plot.caption=element_text(size=14, hjust=1), plot.tag = element_text(size=12, face="bold"))
+```
+
+\pagebreak
+
+Figure 4 is an extension of Figure 3, by plotting the k-nearest neighbors model that utilizes the optimal K value found in Figure 3. 
+
+```{r, echo=F}
+###plot optimal K
+p_test = ggplot(data = D_test) + 
+  geom_point(mapping = aes(x = mileage, y = price), color='gray24')+ theme_bw(base_size=18)
+
+knn_model = knn.reg(X_train, X_test, y_train, k = k_best1)
+D_test$ypred = knn_model$pred
+p_test + geom_path(data=D_test, mapping = aes(x=mileage, y=ypred), color='indianred4', size=1.5)+scale_x_continuous(labels=comma)+
+  labs(title= 'Fitted K-Nearest Neighbors Model')+
+  xlab("mileage(mi)")+
+  ylab('price($)')+
+  labs(tag='Figure 4',
+       caption= 'S-Class 65 AMG')+ theme(plot.title=element_text(),plot.caption=element_text(size=14, hjust=1), plot.tag = element_text(size=12, face="bold"))
+
+```
+
+### **Conclusions**
+
+Overall, it seems like the KNN model worked better for the 350 trim level, since the RMSE is a lot lower in comparison (see Figure 1 and 3). 
+
+When comparing trim levels, there also appears to be a difference in the optimal value for K. 
+The S-Class 350 model had an optimal K value of `r k_best`, while the S-Class 65 AMG model had an optimal K value of `r k_best1`. This difference in K values ultimately comes down to the bias variance tradeoff. There exists a tradeoff between a model's ability to minimize bias and variance. A larger K value adds complexity to the model, resulting in higher variance, but lower bias. The opposite is true for low K values. Thus, the reason why one model has a higher k value is because that model is more sensitive to random noise.
+
+\pagebreak
+
+
+
+
+# Saratoga house prices
+
+
+
+###  **Introduction**
+
+The goal of this exercise is to build a model for predicting house prices in Saratoga, NY. The task is to create a linear model that outperforms the old model discussed in class, as well as the construction of a K-nearest-neighbors (KNN) model with the same features. In addition, the two models developed in this paper will be compared to see which one performs better.
+
+
+###  **Data and Methods**
+
+The dataset contains 1728 observations of 16 variables. These variables are summarized in Table 2, where the price is the response variable we are seeking to predict.  
+
+
+```{r, echo=F}
+names= names(SaratogaHouses)
+kable(names, caption = "Table 2: List of Variables")%>%
+  kable_styling(bootstrap_options= c("striped"), full_width = F, font_size = 8, latex_options = 'hold_position')
+
+n = nrow(SaratogaHouses)
+n_train = round(0.8*n)
+n_test = n - n_train
+
+rmse_vals = do(500)*{
+  train_cases = sample.int(n, n_train, replace=FALSE)
+  test_cases = setdiff(1:n, train_cases)
+  saratoga_train = SaratogaHouses[train_cases,]
+  saratoga_test = SaratogaHouses[test_cases,]
+  
+  # Fit to the training data
+  lm2 = lm(price ~ . - sewer - waterfront - landValue - newConstruction, data=saratoga_train)
+  
+  lm_max= lm(price ~ age + lotSize + landValue + livingArea + pctCollege +bedrooms+ bathrooms + rooms +
+               bedrooms:bathrooms + livingArea:newConstruction, data=saratoga_train )
+  # Predictions out of sample
+  yhat_test2 = predict(lm2, saratoga_test)
+  yhat_test5 = predict(lm_max, saratoga_test)
+  
+  c(rmse(saratoga_test$price, yhat_test2),
+    rmse(saratoga_test$price, yhat_test5))
+}
+CM= as.data.frame(colMeans(rmse_vals))
+rmse_LM= as.data.frame(rmse_vals)
+
+mean_old= format(round(CM[1,], 0), scientific=F, big.mark= ",")
+mean_new= format(round(CM[2,], 0), scientific=F, big.mark= ",")
+```  
+
+Table 3 summarizes the features used in the two models, which aim to outperform the old model. The older model included all variables except for sewer, waterfront, landValue, and newConstruction.  The linear and the KNN model will be compared using the same features, with the exception of interactions, which are omitted in the K-nearest-neighbors model (KNN is sufficiently adaptable to find them). The reason behind deciding to include two interactions in the linear model is that there seems to be a dependent relationship between some variables. For example, in the real world the number of bedrooms is usually not much different from the number of bathrooms. A studio apartment with five bathrooms seems somewhat unlikely. Thus, it makes sense to include an interaction variable that accounts for this effect. 
+
+```{r, echo=F}
+
+names1 = c("age", "lotSize", "landValue", "livingArea", "pctCollege", "bedrooms", "bathrooms","rooms","bedrooms:bathrooms","livingArea:newConstruction")
+kable(names1, caption = "Table 3: Features of the Linear Model")%>%
+  kable_styling(bootstrap_options= "striped", full_width = F, font_size = 8, latex_options = 'hold_position')
+
+
+```
+
+When measuring out of sample performance, there exists random variation due to the particular choice of data points that end up in the train/test split. Thus, both the linear- and the KNN model will be compared using their average out-of-sample RMSE over multiple different train/test splits.
+
+Before running the KNN regression, it is also important to standardize the variables: A one unit change lotSize (sqft) is not equal to a one unit change in the number of bedrooms. To capture this effect, we will use z scores to measure relative effects.  
+
+###  **Results**
+
+#### **(i) Linear Model**
+
+The new linear model outperforms the old model by a significant margin, as can be seen in Figure 5. When averaging over 500 different train/test splits, the old model has a RMSE of around `r mean_old`, while the new model has a RMSE of approximately `r mean_new`.
+
+
+```{r, echo = F}
+
+ggplot(stack(rmse_vals), aes(x=ind, y=values), colour='indianred4')+ geom_boxplot(fill= 'indianred4', color='gray24')+
+  ggtitle('Linear Model Comparison')+ 
+  theme_bw(base_size=16)+
+  labs(tag= 'Figure 5')+
+  xlab("Type")+
+  ylab('RMSE')+
+  scale_x_discrete(labels=c('V1'='Old', 'V2'='New'))+ theme(plot.title=element_text(),plot.caption=element_text(size=14, hjust=1), plot.tag = element_text(size=12, face="bold"))
+
+```
+
+According to the new model, the strongest drivers of house prices are landValue, livingArea, bathrooms and the interaction between livingArea and NewConstruction. Table 5 summarizes the new linear model and highlights the significance levels of individual features. The strong drivers listed above all have extremely low p values of below 0.001.
+
+
+![.](C:\Users\Max\OneDrive\Dokumente\GitHub\SDS323_Spring2020\Capture.JPG)
+
+
+\pagebreak
+
+
+#### **(ii) KNN Model**
+
+
+
+```{r, echo=F}
+k_grid = unique(round(exp(seq(log(1382), log(2), length=100))))
+rmse_grid_out = foreach(k = k_grid, .combine='c') %do% {
+  
+rmse_vals = do(100)*{
+  train_cases = sample.int(n, n_train, replace=FALSE)
+  test_cases = setdiff(1:n, train_cases)
+  saratoga_train = SaratogaHouses[train_cases,]
+  saratoga_test = SaratogaHouses[test_cases,]
+  Xtrain= model.matrix(~ lotSize  +age +landValue + livingArea + pctCollege +bedrooms+ bathrooms + rooms+ -1, data= saratoga_train )
+  Xtest= model.matrix(~ lotSize  +age  +landValue + livingArea + pctCollege +bedrooms+ bathrooms + rooms+ -1, data= saratoga_test )
+  ytrain= saratoga_train$price
+  ytest= saratoga_test$price
+  scale_train=apply(Xtrain, 2, sd)
+  Xtilde_train= scale(Xtrain, scale = scale_train)
+  Xtilde_test= scale(Xtest, scale = scale_train)
+  knn_model= knn.reg(Xtilde_train, Xtilde_test, ytrain, k=k)
+  rmse(ytest, knn_model$pred)
+}
+colMeans(rmse_vals)
+}
+
+rmse_grid_out = data.frame(K = k_grid, RMSE = rmse_grid_out)
+
+p_out = ggplot(data=rmse_grid_out) + 
+  geom_path(aes(x=K, y=RMSE), size=1.5) + 
+  scale_x_continuous(trans=revlog_trans(base = 10))
+
+ind_best = which.min(rmse_grid_out$RMSE)
+k_best = k_grid[ind_best]
+```
+
+
+Figure 6 deals with the KNN model and describes the RMSE for many different values of K. In this model the value of K that minimizes the RMSE is `r k_best`.
+
+
+```{r, echo=F}
+p_out +
+  scale_colour_manual(name="RMSE", values=c(testset="gray24", trainset='gray24')) + scale_y_continuous(labels=comma)+
+  geom_vline(xintercept=k_best, color= 'indianred4',size=1.5)+
+  ggtitle('RMSE vs K')+ 
+  theme_bw(base_size=18)+
+  annotate(geom='text', x=5, y=95000, label = "Optimal K", color= 'indianred4')+
+  labs(tag= 'Figure 6')+ theme(plot.title=element_text(),plot.caption=element_text(size=14, hjust=1), plot.tag = element_text(size=12, face="bold"))
+
+
+```
+
+Figure 7 captures and compares the RMSE of all three models. It is apparent that both newly developed models perform better than the old model. Among the new models, the linear model seems to perform slightly better.
+
+
+
+
+```{r, echo=F}
+rmse_vals = do(100)*{
+  train_cases = sample.int(n, n_train, replace=FALSE)
+  test_cases = setdiff(1:n, train_cases)
+  saratoga_train = SaratogaHouses[train_cases,]
+  saratoga_test = SaratogaHouses[test_cases,]
+  Xtrain= model.matrix(~ lotSize  +age +landValue + livingArea + pctCollege +bedrooms+ bathrooms + rooms+ -1, data= saratoga_train )
+  Xtest= model.matrix(~ lotSize  +age  +landValue + livingArea + pctCollege +bedrooms+ bathrooms + rooms+ -1, data= saratoga_test )
+  ytrain= saratoga_train$price
+  ytest= saratoga_test$price
+  scale_train=apply(Xtrain, 2, sd)
+  Xtilde_train= scale(Xtrain, scale = scale_train)
+  Xtilde_test= scale(Xtest, scale = scale_train)
+  knn_model= knn.reg(Xtilde_train, Xtilde_test, ytrain, k=k_best)
+  rmse(ytest, knn_model$pred)
+}
+
+
+newdata= merge(rmse_LM, rmse_vals)
+
+ggplot(stack(newdata), aes(x=ind, y=values), colour='indianred4')+ geom_boxplot(fill= 'indianred4', color='gray24')+
+  ggtitle('KNN vs Linear Models')+ 
+  theme_bw(base_size=16)+
+  labs(tag= 'Figure 7')+
+  xlab("Type")+
+  ylab('RMSE')+
+  scale_x_discrete(labels=c('V1'='LM OLD', 'V2'='LM NEW', 'result'='KNN'))+ theme(plot.title=element_text(),plot.caption=element_text(size=14, hjust=1), plot.tag = element_text(size=12, face="bold"))
+
+
+```
+
+
+###  **Conclusions**
+
+Overall, these results indicate that feature selection can make a big difference. In fact, it seems like variables such as land value, living area, and new construction are particularly strong drivers of house prices, and are therefore crucial to consider when thinking about price-modeling strategies. 
+Based on these results, the linear model will perform better than a KNN in the future, and constitutes therefore a viable option for predicting house prices.  
+
+
+
+
+
+
+
+
+
+\pagebreak
+
+
+
+
+# Predicting when articles go viral
+
+
+
+
+###  **Introduction**
+
+The goal of this exercise is to predict when articles go viral. The company Mashable considers an article viral if it was shared more than 1400 times. They are interested in knowing if there's anything they can learn about how to improve an article's chance of reaching this threshold. (E.g by telling people to write shorter headlines, snarkier articles, or whatever.)
+
+###  **Data and Methods**
+The provided dataset contains data on 39,797 online articles published by Mashable during 2013 and 2014. It encompasses 38 variables, where target variable is shares. Other variables that can be used for the analysis are article-level features and are summarized in Table 4. 
+
+```{r , echo=F}
+VarExp= c('Number of words in the title',
+           'Number of words in the content',
+           'Number of links',
+           'Number of links to other articles published by Mashable',
+           'Number of images',
+           'Number of videos',
+           'Average length of the words in the content',
+           'Number of keywords in the metadata',
+           'Is data channel "Lifestyle"?',
+           'Is data channel "Entertainment"?',
+           'Is data channel "Business"?',
+           'Is data channel "Social Media"?',
+           'Is data channel "Tech"?',
+           'Is data channel "World"?',
+           'Min. shares of referenced articles in Mashable',
+           'Max. shares of referenced articles in Mashable',
+           'Avg. shares of referenced articles in Mashable',
+           'Was the article published on a Monday?',
+           'Was the article published on a Tuesday?',
+           'Was the article published on a Wednesday?',
+           'Was the article published on a Thursday?',
+           'Was the article published on a Friday?',
+           'Was the article published on a Saturday?',
+           'Was the article published on a Sunday?',
+           'Rate of positive words in the content',
+           'Rate of negative words in the content',
+           'Avg. polarity of positive words',
+           'Min. polarity of positive words',
+           'Max. polarity of positive words',
+           'Avg. polarity of negative words',
+           'Min. polarity of negative words',
+           'Max. polarity of negative words',
+           'Title polarity',
+           'Title subjectivity')
+Var= c('n_tokens_title',              
+        'n_tokens_content',             
+        'num_hrefs',                     
+        'num_self_hrefs',                
+        'num_imgs',                      
+        'num_videos',                    
+        'average_token_length',          
+        'num_keywords',                  
+        'data_channel_is_lifestyle',     
+        'data_channel_is_entertainment', 
+        'data_channel_is_bus',           
+        'data_channel_is_socmed',        
+        'data_channel_is_tech',
+        'data_channel_is_world',        
+        'self_reference_min_shares',     
+        'self_reference_max_shares',     
+        'self_reference_avg_sharess',   
+        'weekday_is_Monday',             
+        'weekday_is_Tuesday',            
+        'weekday_is_Wednesday',          
+        'weekday_is_Thursday',         
+        'weekday_is_Friday',             
+        'weekday_is_Saturday',           
+        'weekday_is_Sunday',             
+        'global_rate_positive_words',    
+        'global_rate_negative_words',    
+        'avg_positive_polarity',         
+        'min_positive_polarity',         
+        'max_positive_polarity',         
+        'avg_negative_polarity',         
+        'min_negative_polarity',         
+        'max_negative_polarity',         
+        'title_subjectivity',            
+        'title_sentiment_polarity')      
+Features= data.frame(Var, VarExp)
+kable(Features, col.names= c('Variable','Definition'), caption = "Table 4: List of Feature Variables")%>%
+  kable_styling(bootstrap_options= c("striped", 'condensed'), full_width = F, font_size= 8, latex_options = 'hold_position')
+
+```
+
+The task of this exercise is to approach the problem by using two different methods: regression, and classification.
+Before diving into these techniques, however, a null model will be established that can be used as a reference point to compare different models. A quick look at the dataset reveals that there are slightly more articles that did not go viral (Table 6).
+
+```{r, echo=F}
+online_news = read.csv('~/GitHub/SDS323-master/data/online_news.csv')
+online_news$viral = ifelse(online_news$shares >1400, 1, 0)
+xy=table(online_news$viral)
+row.names(xy)<- c('Not Viral','Viral')
+kable(xy, col.names= c('','Count'), caption = "Table 6: Data exploration")%>%
+  kable_styling(full_width = F, latex_options = 'hold_position')
+
+```
+
+Thus, the constructed null model will always predict "not viral", which results in an error rate below 50 percent when applied to the entire data set. 
+
+In both modeling approaches, the model will be built on all available features.
+When approaching this problem from a regression standpoint, it is important to threshold the model's predictions. That is,
+
+- if predicted shares exceed 1400, predict the article as "viral"
+
+- if predicted shares are 1400 or lower, predict the article as "not viral"
+
+The regression model of choice will be stepwise linear regression with forward selection, in order to make predictions about viral status. In this model, all features will be used as a basis for forward selection. However, interdependence was not accounted for (no interactions or squared terms).
+
+
+On the other hand, when approaching this problem from a standpoint of classification, viral status will be directly predicted as a target variable. Thus 'viral' will first be defined as a new variable, which is binary and takes values of 1 if shares exceed 1400, and 0 if not. 
+
+For this part, the Naive Bayes Classifier will be the model of choice. 
+
+
+Finally, both approaches will be compared using the average error rate, true positive rate, and false positive rate over multiple train/test splits. To compare equal quantities between the models, a total of 5 splits will be used. Note that the accuracy of the results will go up with the number of splits.
+
+
+###  **Results**
+
+#### **(i) Regression**
+
+
+```{r, include=F}
+rm(xx)
+n = nrow(online_news)
+n_train = round(0.8*n)
+n_test = n - n_train
+
+###looping manually because I had trouble with the do loop
+
+#run1
+  train_cases = sample.int(n, n_train, replace=FALSE)
+  test_cases = setdiff(1:n, train_cases)
+  news_train = online_news[train_cases,]
+  news_test = online_news[test_cases,]
+  lm0 = lm(shares ~ 1, data=news_train)
+  lm1= step(lm0, direction = 'forward', scope = ~(n_tokens_title +num_hrefs+ 
+                                                    average_token_length+num_keywords+
+                                                    data_channel_is_entertainment+data_channel_is_bus+
+                                                    data_channel_is_socmed+data_channel_is_tech+
+                                                    data_channel_is_world+
+                                                    self_reference_max_shares+
+                                                    avg_negative_polarity+n_tokens_content+num_self_hrefs+
+                                                    num_videos+data_channel_is_lifestyle+
+                                                    self_reference_min_shares+
+                                                    self_reference_avg_sharess+weekday_is_monday+
+                                                    weekday_is_tuesday+weekday_is_wednesday+weekday_is_thursday+
+                                                    weekday_is_friday+
+                                                    weekday_is_saturday+weekday_is_sunday+
+                                                    global_rate_positive_words+
+                                                    global_rate_negative_words+avg_positive_polarity
+  ))
+  phat_test = predict(lm1, news_test)
+  news_test$baseline= 0
+  yhat_test = ifelse(phat_test >1400, 1, 0)
+
+
+
+if (exists('xx')==F){
+  xx=as.data.frame(table(news_test$viral, yhat_test))
+}else{
+  y=as.data.frame(table(news_test$viral, yhat_test))
+  xx[,3]= xx[,3]+ y[,3]
+}
+  
+#run2
+  train_cases = sample.int(n, n_train, replace=FALSE)
+  test_cases = setdiff(1:n, train_cases)
+  news_train = online_news[train_cases,]
+  news_test = online_news[test_cases,]
+  lm0 = lm(shares ~ 1, data=news_train)
+  lm1= step(lm0, direction = 'forward', scope = ~(n_tokens_title +num_hrefs+ 
+                                                    average_token_length+num_keywords+
+                                                    data_channel_is_entertainment+data_channel_is_bus+
+                                                    data_channel_is_socmed+data_channel_is_tech+
+                                                    data_channel_is_world+
+                                                    self_reference_max_shares+
+                                                    avg_negative_polarity+n_tokens_content+num_self_hrefs+
+                                                    num_videos+data_channel_is_lifestyle+
+                                                    self_reference_min_shares+
+                                                    self_reference_avg_sharess+weekday_is_monday+
+                                                    weekday_is_tuesday+weekday_is_wednesday+weekday_is_thursday+
+                                                    weekday_is_friday+
+                                                    weekday_is_saturday+weekday_is_sunday+
+                                                    global_rate_positive_words+
+                                                    global_rate_negative_words+avg_positive_polarity
+  ))
+  phat_test = predict(lm1, news_test)
+  news_test$baseline= 0
+  yhat_test = ifelse(phat_test >1400, 1, 0)
+
+
+if (exists('xx')==F){
+  xx=as.data.frame(table(news_test$viral, yhat_test))
+}else{
+  y=as.data.frame(table(news_test$viral, yhat_test))
+  xx[,3]= xx[,3]+ y[,3]
+}
+
+#run3
+
+  train_cases = sample.int(n, n_train, replace=FALSE)
+  test_cases = setdiff(1:n, train_cases)
+  news_train = online_news[train_cases,]
+  news_test = online_news[test_cases,]
+  lm0 = lm(shares ~ 1, data=news_train)
+  lm1= step(lm0, direction = 'forward', scope = ~(n_tokens_title +num_hrefs+ 
+                                                    average_token_length+num_keywords+
+                                                    data_channel_is_entertainment+data_channel_is_bus+
+                                                    data_channel_is_socmed+data_channel_is_tech+
+                                                    data_channel_is_world+
+                                                    self_reference_max_shares+
+                                                    avg_negative_polarity+n_tokens_content+num_self_hrefs+
+                                                    num_videos+data_channel_is_lifestyle+
+                                                    self_reference_min_shares+
+                                                    self_reference_avg_sharess+weekday_is_monday+
+                                                    weekday_is_tuesday+weekday_is_wednesday+weekday_is_thursday+
+                                                    weekday_is_friday+
+                                                    weekday_is_saturday+weekday_is_sunday+
+                                                    global_rate_positive_words+
+                                                    global_rate_negative_words+avg_positive_polarity
+  ))
+  phat_test = predict(lm1, news_test)
+  news_test$baseline= 0
+  yhat_test = ifelse(phat_test >1400, 1, 0)
+
+
+
+
+if (exists('xx')==F){
+  xx=as.data.frame(table(news_test$viral, yhat_test))
+}else{
+  y=as.data.frame(table(news_test$viral, yhat_test))
+  xx[,3]= xx[,3]+ y[,3]
+}
+
+#run4
+  
+   train_cases = sample.int(n, n_train, replace=FALSE)
+  test_cases = setdiff(1:n, train_cases)
+  news_train = online_news[train_cases,]
+  news_test = online_news[test_cases,]
+  lm0 = lm(shares ~ 1, data=news_train)
+  lm1= step(lm0, direction = 'forward', scope = ~(n_tokens_title +num_hrefs+ 
+                                                    average_token_length+num_keywords+
+                                                    data_channel_is_entertainment+data_channel_is_bus+
+                                                    data_channel_is_socmed+data_channel_is_tech+
+                                                    data_channel_is_world+
+                                                    self_reference_max_shares+
+                                                    avg_negative_polarity+n_tokens_content+num_self_hrefs+
+                                                    num_videos+data_channel_is_lifestyle+
+                                                    self_reference_min_shares+
+                                                    self_reference_avg_sharess+weekday_is_monday+
+                                                    weekday_is_tuesday+weekday_is_wednesday+weekday_is_thursday+
+                                                    weekday_is_friday+
+                                                    weekday_is_saturday+weekday_is_sunday+
+                                                    global_rate_positive_words+
+                                                    global_rate_negative_words+avg_positive_polarity
+  ))
+  phat_test = predict(lm1, news_test)
+  news_test$baseline= 0
+  yhat_test = ifelse(phat_test >1400, 1, 0)
+
+
+if (exists('xx')==F){
+  xx=as.data.frame(table(news_test$viral, yhat_test))
+}else{
+  y=as.data.frame(table(news_test$viral, yhat_test))
+  xx[,3]= xx[,3]+ y[,3]
+}
+
+
+#run5
+  
+  train_cases = sample.int(n, n_train, replace=FALSE)
+  test_cases = setdiff(1:n, train_cases)
+  news_train = online_news[train_cases,]
+  news_test = online_news[test_cases,]
+  lm0 = lm(shares ~ 1, data=news_train)
+  lm1= step(lm0, direction = 'forward', scope = ~(n_tokens_title +num_hrefs+ 
+                                                    average_token_length+num_keywords+
+                                                    data_channel_is_entertainment+data_channel_is_bus+
+                                                    data_channel_is_socmed+data_channel_is_tech+
+                                                    data_channel_is_world+
+                                                    self_reference_max_shares+
+                                                    avg_negative_polarity+n_tokens_content+num_self_hrefs+
+                                                    num_videos+data_channel_is_lifestyle+
+                                                    self_reference_min_shares+
+                                                    self_reference_avg_sharess+weekday_is_monday+
+                                                    weekday_is_tuesday+weekday_is_wednesday+weekday_is_thursday+
+                                                    weekday_is_friday+
+                                                    weekday_is_saturday+weekday_is_sunday+
+                                                    global_rate_positive_words+
+                                                    global_rate_negative_words+avg_positive_polarity
+  ))
+  phat_test = predict(lm1, news_test)
+  news_test$baseline= 0
+  yhat_test = ifelse(phat_test >1400, 1, 0)
+
+
+
+
+if (exists('xx')==F){
+  xx=as.data.frame(table(news_test$viral, yhat_test))
+}else{
+  y=as.data.frame(table(news_test$viral, yhat_test))
+  xx[,3]= xx[,3]+ y[,3]
+} 
+  
+```
+
+
+
+
+
+
+
+
+
+
+Table 7 captures the confusion matrix of the linear model, while Table 8 captures the confusion matrix of the null model. 
+The error rates of each model are summarized in Table 9. Notice that the linear model actually performed worse than the Null model, since it's error rate is slightly higher in comparison.
+```{r, echo=F}
+ConfusionMatrix= cbind(as.data.frame(xx[1:2,3]),as.data.frame(xx[3:4,3]))
+rownames(ConfusionMatrix)<- c('y=0','y=1')
+###CM
+kable(ConfusionMatrix, col.names= c('0','1'), caption = "Table 7: Confusion Matrix (Linear Model)")%>%
+  kable_styling(bootstrap_options= "striped", full_width = F, latex_options = 'hold_position')%>%
+  column_spec(1, bold=T, border_right = T)%>%
+  add_header_above(c("",'yhat'=2))
+
+CM=ConfusionMatrix
+
+l1= c('Error_rate'= ((CM[2,1]+CM[1,2])/sum(CM)),
+      'TPR'=CM[2,2]/(CM[2,2]+CM[2,1]),
+      'FPR'=CM[1,2]/(CM[1,1]+CM[1,2]))
+
+#create null model (predicts 0 all the time)
+online_news$baseline= 0
+y= factor(online_news$viral)
+yhat= factor(online_news$baseline)
+online_news$baseline[1]=1
+confusion_out2=table(y=online_news$viral, yhat= online_news$baseline) 
+rownames(confusion_out2)<- c('y=0','y=1')
+confusion_out2[1,2]=0
+confusion_out2[1,1]=20082
+
+kable(confusion_out2, col.names= c('0','1'), caption = "Table 8: Confusion Matrix (Null Model)")%>%
+  kable_styling(bootstrap_options= "striped",  full_width = F, latex_options = 'hold_position')%>%
+  column_spec(1, bold=T, border_right = T)%>%
+  add_header_above(c("",'yhat'=2))
+
+l2= c('Error_rate1'= confusion_out2[2,1]/sum(confusion_out2),
+      
+      'TPR1'=0/(confusion_out2[2,1]+0),
+      'FPR1'=0/(confusion_out2[1,1]+0)
+)
+err_rates= append(l1,l2)
+
+
+###Error Rates LM
+err_rates=as.data.frame(err_rates)
+err_rates= 100*(cbind(as.data.frame(err_rates[1:3,1]), as.data.frame(err_rates[4:6,1])))
+names(err_rates)= c('Linear', 'Null')
+rownames(err_rates)<- c('Error_rate (%)', 'TPR (%)', 'FPR (%)')
+kable(err_rates, digits= 2, caption = "Table 9: Error Rates (Regression)")%>%
+  kable_styling(bootstrap_options= "striped", full_width = F, latex_options = 'hold_position')%>%
+  column_spec(1, bold=T)
+
+
+
+```
+
+
+#### **(ii) Classification**
+
+Table 10 captures the confusion matrix for the naive bayes model, while Table 11 captures the confusion matrix for the null model. Table 12 sumamrizes the error rates for both models. Note that in this case, the naive bayes model outperforms the null model. 
+
+```{r, include=F}
+N = nrow(online_news)
+D = ncol(online_news)-7
+
+#manual loops as before
+# First split into a training and set set
+X_NB = online_news[,-c(1,40,39,38,34,32,33 )]  # feature matrix
+y_NB = online_news$viral  # target variable
+rm(x)
+
+  train_frac = 0.8
+  train_set = sort(sample.int(N, floor(train_frac*N)))
+  test_set = setdiff(1:N, train_set)
+
+# training and testing matrices
+  X_train = (X_NB[train_set,]) + 1/D
+  y_train = y_NB[train_set]
+  X_test = X_NB[test_set,]
+  y_test = y_NB[test_set]
+
+  pvec_0 = colSums(X_train[y_train==0,])
+  pvec_0 = pvec_0/sum(pvec_0)
+  pvec_1 = colSums(X_train[y_train==1,])
+  pvec_1 = pvec_1/sum(pvec_1)
+  
+# priors
+priors = table(y_train) %>% prop.table
+
+# classify all the docs in the test set
+yhat_test = foreach(i = seq_along(test_set), .combine='c') %do% {
+  test_doc = X_test[i,]
+  logp0 = sum(test_doc * log(pvec_0)) + log(priors[1])
+  logp1 = sum(test_doc * log(pvec_1)) + log(priors[2])
+  0 + {logp1 > logp0}
+}
+
+if (exists('x')==F){
+  x=as.data.frame(table(y_test, yhat_test))
+}else{
+  y=as.data.frame(table(y_test, yhat_test))
+  x[,3]= x[,3]+ y[,3]
+}
+
+  train_frac = 0.8
+  train_set = sort(sample.int(N, floor(train_frac*N)))
+  test_set = setdiff(1:N, train_set)
+
+# training and testing matrices
+  X_train = (X_NB[train_set,]) + 1/D
+  y_train = y_NB[train_set]
+  X_test = X_NB[test_set,]
+  y_test = y_NB[test_set]
+
+  pvec_0 = colSums(X_train[y_train==0,])
+  pvec_0 = pvec_0/sum(pvec_0)
+  pvec_1 = colSums(X_train[y_train==1,])
+  pvec_1 = pvec_1/sum(pvec_1)
+  
+# priors
+priors = table(y_train) %>% prop.table
+
+# classify all the docs in the test set
+yhat_test = foreach(i = seq_along(test_set), .combine='c') %do% {
+  test_doc = X_test[i,]
+  logp0 = sum(test_doc * log(pvec_0)) + log(priors[1])
+  logp1 = sum(test_doc * log(pvec_1)) + log(priors[2])
+  0 + {logp1 > logp0}
+}
+
+if (exists('x')==F){
+  x=as.data.frame(table(y_test, yhat_test))
+}else{
+  y=as.data.frame(table(y_test, yhat_test))
+  x[,3]= x[,3]+ y[,3]
+}
+
+  train_frac = 0.8
+  train_set = sort(sample.int(N, floor(train_frac*N)))
+  test_set = setdiff(1:N, train_set)
+
+# training and testing matrices
+  X_train = (X_NB[train_set,]) + 1/D
+  y_train = y_NB[train_set]
+  X_test = X_NB[test_set,]
+  y_test = y_NB[test_set]
+
+  pvec_0 = colSums(X_train[y_train==0,])
+  pvec_0 = pvec_0/sum(pvec_0)
+  pvec_1 = colSums(X_train[y_train==1,])
+  pvec_1 = pvec_1/sum(pvec_1)
+  
+# priors
+priors = table(y_train) %>% prop.table
+
+# classify all the docs in the test set
+yhat_test = foreach(i = seq_along(test_set), .combine='c') %do% {
+  test_doc = X_test[i,]
+  logp0 = sum(test_doc * log(pvec_0)) + log(priors[1])
+  logp1 = sum(test_doc * log(pvec_1)) + log(priors[2])
+  0 + {logp1 > logp0}
+}
+
+if (exists('x')==F){
+  x=as.data.frame(table(y_test, yhat_test))
+}else{
+  y=as.data.frame(table(y_test, yhat_test))
+  x[,3]= x[,3]+ y[,3]
+}
+
+  train_frac = 0.8
+  train_set = sort(sample.int(N, floor(train_frac*N)))
+  test_set = setdiff(1:N, train_set)
+
+# training and testing matrices
+  X_train = (X_NB[train_set,]) + 1/D
+  y_train = y_NB[train_set]
+  X_test = X_NB[test_set,]
+  y_test = y_NB[test_set]
+
+  pvec_0 = colSums(X_train[y_train==0,])
+  pvec_0 = pvec_0/sum(pvec_0)
+  pvec_1 = colSums(X_train[y_train==1,])
+  pvec_1 = pvec_1/sum(pvec_1)
+  
+# priors
+priors = table(y_train) %>% prop.table
+
+# classify all the docs in the test set
+yhat_test = foreach(i = seq_along(test_set), .combine='c') %do% {
+  test_doc = X_test[i,]
+  logp0 = sum(test_doc * log(pvec_0)) + log(priors[1])
+  logp1 = sum(test_doc * log(pvec_1)) + log(priors[2])
+  0 + {logp1 > logp0}
+}
+
+if (exists('x')==F){
+  x=as.data.frame(table(y_test, yhat_test))
+}else{
+  y=as.data.frame(table(y_test, yhat_test))
+  x[,3]= x[,3]+ y[,3]
+}
+
+  train_frac = 0.8
+  train_set = sort(sample.int(N, floor(train_frac*N)))
+  test_set = setdiff(1:N, train_set)
+
+# training and testing matrices
+  X_train = (X_NB[train_set,]) + 1/D
+  y_train = y_NB[train_set]
+  X_test = X_NB[test_set,]
+  y_test = y_NB[test_set]
+
+  pvec_0 = colSums(X_train[y_train==0,])
+  pvec_0 = pvec_0/sum(pvec_0)
+  pvec_1 = colSums(X_train[y_train==1,])
+  pvec_1 = pvec_1/sum(pvec_1)
+  
+# priors
+priors = table(y_train) %>% prop.table
+
+# classify all the docs in the test set
+yhat_test = foreach(i = seq_along(test_set), .combine='c') %do% {
+  test_doc = X_test[i,]
+  logp0 = sum(test_doc * log(pvec_0)) + log(priors[1])
+  logp1 = sum(test_doc * log(pvec_1)) + log(priors[2])
+  0 + {logp1 > logp0}
+}
+
+if (exists('x')==F){
+  x=as.data.frame(table(y_test, yhat_test))
+}else{
+  y=as.data.frame(table(y_test, yhat_test))
+  x[,3]= x[,3]+ y[,3]
+}
+
+```
+
+
+```{r, echo=F}
+
+ConfusionMatrix= cbind(as.data.frame(x[1:2,3]),as.data.frame(x[3:4,3]))
+rownames(ConfusionMatrix)<- c('y=0','y=1')
+kable(ConfusionMatrix, col.names= c('0','1'), caption = "Table 10: Confusion Matrix (Naive Bayes)")%>%
+  kable_styling(bootstrap_options= "striped", full_width = F, latex_options = 'hold_position')%>%
+  column_spec(1, bold=T, border_right = T)%>%
+  add_header_above(c("",'yhat'=2))
+
+CM=ConfusionMatrix
+
+l1= c('Error_rate'= ((CM[2,1]+CM[1,2])/sum(CM)),
+      'TPR'=CM[2,2]/(CM[2,2]+CM[2,1]),
+      'FPR'=CM[1,2]/(CM[1,1]+CM[1,2]))
+
+
+#create null model (predicts 0 all the time)
+online_news$baseline= 0
+y= factor(online_news$viral)
+yhat= factor(online_news$baseline)
+online_news$baseline[1]=1
+confusion_out2=table(y=online_news$viral, yhat= online_news$baseline) 
+rownames(confusion_out2)<- c('y=0','y=1')
+confusion_out2[1,2]=0
+confusion_out2[1,1]=20082
+
+l2= c('Error_rate1'= confusion_out2[2,1]/sum(confusion_out2),
+
+      'TPR1'=0/(confusion_out2[2,1]+0),
+      'FPR1'=0/(confusion_out2[1,1]+0)
+)
+
+kable(confusion_out2, col.names= c('0','1'), caption = "Table 11: Confusion Matrix (Null Model)")%>%
+  kable_styling(bootstrap_options= "striped", full_width = F, latex_options = 'hold_position')%>%
+  column_spec(1, bold=T, border_right = T)%>%
+  add_header_above(c("",'yhat'=2))
+
+
+err_rates= append(l1,l2)
+
+Accuracy1=1-l1[1]
+Accuracy2=1-l2[1]
+AbsImp= round(100*(Accuracy1-Accuracy2), 2)
+Lift= round(Accuracy1/Accuracy2, 2)
+
+```
+
+
+The naive bayes model shows an absolute improvement of around `r AbsImp` % and a lift over the null model of around `r Lift`.
+
+
+
+```{r, echo=F}
+err_rates=as.data.frame(err_rates)
+err_rates= 100*(cbind(as.data.frame(err_rates[1:3,1]), as.data.frame(err_rates[4:6,1])))
+names(err_rates)= c('Naive Bayes', 'Null')
+rownames(err_rates)<- c('Error_rate (%)', 'TPR (%)', 'FPR (%)')
+kable(err_rates, digits= 2, caption = "Table 12: Error Rates (Classification)")%>%
+  kable_styling(bootstrap_options= "striped", full_width = F, latex_options = 'hold_position')%>%
+  column_spec(1, bold=T)
+
+```
+
+\pagebreak
+
+###  **Conclusions**
+Overall, it is safe to say that the approach of threshold first and regress/classify second (classification) performed better than the regress first and threshold second approach. One likely explanation for this is that regression is more sensitive to variation in the data. In a classification model, all shares above 1400 are valued the same (viral), whereas a regression model imposes a ranking between different viral and non viral articles before it classifies them. This implies that features of articles with a lot shares, say 3000, will be weighted more significant in the regression than features of articles with 1500 shares,for example. 
+The naive bayes model outperformed the linear-, as well as the null model. For further research, it would make sense to look at other models such as KNN or logistic regression to check if they can outperform the proposed naive bayes model.
+
+
+
+
