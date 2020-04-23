@@ -1,0 +1,712 @@
+---
+title: "Exercise 3"
+author: "Max Kutschinski"
+date: "4/21/2020"
+output: 
+  pdf_document:
+    fig_caption: yes
+theme: cerulean
+---
+
+```{r setup, include=FALSE, comment=NA}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(knitr)
+library(ggplot2)
+library(LICORS)  # for kmeans++
+library(foreach)
+library(mosaic)
+library(cluster)
+library(FNN)
+library(glmnet)
+library(tidyverse)
+library(dplyr)
+library(kableExtra)
+library(sjPlot)
+library(sjmisc)
+library(sjlabelled)
+library(gamlr)
+library(grid)
+library(gridExtra)
+
+
+set.seed(1)
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+green = read.csv('~/GitHub/SDS323/data/greenbuildings.csv')
+wine = read.csv('~/GitHub/SDS323/data/wine.csv')
+social = read.csv('~/GitHub/SDS323/data/social_marketing.csv')
+
+
+```
+
+
+# Predictive model building
+
+###  **Overview**
+
+The dataset contains data on 7,894 commercial rental properties from across the United States. Of these, 685 properties have been awarded either LEED or EnergyStar certification as a green building. Each of these 685 buildings was matched to a cluster of nearby commercial buildings in the CoStar database, where each small cluster contains one green-certified building, and all non-rated buildings within a quarter-mile radius of the certified building. On average, each of the 685 clusters contains roughly 12 buildings, for a total of 7,894 data points. Some examples of features in the dataset are the building’s age, electricity costs, number of stories, and average rent within the geographic region.
+
+
+Below are two plots comparing the rent charged, as well as the occupancy rates between green and non-green buildings.
+
+```{r, echo=F, fig.width = 5, fig.height = 3, fig.align='center', out.width='.49\\linewidth', fig.show='hold', comment=NA, warning=FALSE}
+
+clean_data= green%>%
+  filter(leasing_rate>34)%>%
+  filter(class_a==1 | class_b==1)%>%
+  filter(size>13000 & size<850000)%>%
+  filter(empl_gr>0.9 & empl_gr<4.5)%>%
+  filter(Rent>12.5 & Rent<55)%>%
+  filter(stories>12.5 & stories<55)%>%
+  filter(age<100)%>%
+  filter(cd_total_07>130 & cd_total_07<3130)%>%
+  filter(hd_total07>1178 & cd_total_07<7171)%>%
+  filter(cluster_rent<45 & cluster_rent>14)%>%
+  select(-LEED,-Energystar)%>%
+  select(-CS_PropertyID)
+
+outliers<-boxplot(clean_data$Rent, plot=F)$out
+clean_data<-clean_data[-which(clean_data$Rent %in% outliers),] 
+
+
+ggplot(clean_data, aes(factor(green_rating), Rent))+
+  geom_boxplot(colour="grey24")+
+  geom_jitter(alpha=0.1, colour= "indianred4")+
+  labs(title= "Rent charged",
+       x= "Green rating",
+       y= "Rent ($/sq.ft)")+
+  scale_x_discrete(labels = c("No","Yes"))
+  
+
+
+ggplot(clean_data, aes(leasing_rate))+
+  geom_density(aes(fill=factor(green_rating)), alpha =0.8)+
+  labs(title= "Occupancy rates",
+       x= "Leasing rate", y="Density",
+       fill= "Green rating")+
+  scale_fill_discrete(labels = c("No","Yes"))
+
+
+
+```
+
+These two plots suggest that green rated bulidings not only benefit from charging more rent, but are also less likely to be vacant. Thus, there clearly seems to be an incentive for "going green". The goal of this exercise is to find a model that does a good job of predicting price and to use this model to quantify the average change in rental income associated with green certification. 
+
+###  **Methods**
+
+This problem will be approached using four different models. The baseline (null) model will be a linear model that uses only main effects, which are chosen through a forward selection alogorithm. This model will then be compared to a similar linear model that runs on the same algorithm, with the exception of accounting for interactions. 
+
+Since a forward selection algorithm that includes interactions is likely to produce a model with a lot of features, there exists a risk of overfitting. Thus, lasso regression techniques will be used with the goal of reducing model complexity as well as simplifying feature selection. This will produce a simpler third model for comparison. 
+Lastly, the problem will be approached from a standpoint of KNN regression. This model will use the same features as the null model for simplicity. 
+
+Since there exists random variation due to the particular choice of data points that end up in the train/test splits, models will be compared using their average-out-of-sample RMSE over multiple different train/test splits. 
+
+
+### **Results**
+
+The figure below captures the RMSE results for each linear model using forward selection. L1 represents the model that only includes main effects, and L2 represents the model that includes main effects, as well as interactions.
+
+```{r, echo=F, message=FALSE, fig.width = 5, fig.height = 3, fig.align='center', out.width='.49\\linewidth', fig.show='hold', comment=NA, warning=FALSE}
+################ functions
+rmse = function(y, yhat) {
+  sqrt(mean((y - yhat)^2, na.rm=TRUE))
+}
+
+
+revlog_trans <- function(base = exp(1)) {
+  require(scales)
+  trans <- function(x){
+    -log(x, base)
+  }
+  inv <- function(x){
+    base^(-x)
+  }
+  scales::trans_new(paste("revlog-", base, sep = ""),
+                    trans,
+                    inv,  
+                    log_breaks(base = base), 
+                    domain = c(1e-100, Inf) 
+  )
+}
+
+
+############################# end functions
+
+
+###forward selection linear models
+lm0 = lm(Rent ~ 1, data=clean_data)
+lm_forward1 = step(lm0, direction='forward', trace= 0,
+                  scope=~(cluster+size+empl_gr+leasing_rate+stories+age+renovated+class_a+class_b
+                          +green_rating+net+amenities+cd_total_07+hd_total07+total_dd_07+Precipitation+Gas_Costs
+                          +Electricity_Costs+cluster_rent))
+lm_forward2 = step(lm0, direction='forward', trace= 0,
+                   scope=~(cluster+size+empl_gr+leasing_rate+stories+age+renovated+class_a+class_b
+                           +green_rating+net+amenities+cd_total_07+hd_total07+total_dd_07+Precipitation+Gas_Costs
+                           +Electricity_Costs+cluster_rent)^2)
+n = nrow(clean_data)
+n_train = round(0.8*n)  # round to nearest integer
+n_test = n - n_train
+
+linear = do(20)*{
+  
+  # re-split into train and test cases with the same sample sizes
+  train_cases = sample.int(n, n_train, replace=FALSE)
+  test_cases = setdiff(1:n, train_cases)
+  green_train = clean_data[train_cases,]
+  green_test = clean_data[test_cases,]
+  
+  # Fit to the training data
+  # use `update` to refit the same model with a different set of data
+  lm1 = update(lm_forward1, data=green_train)
+  lm2 = update(lm_forward2, data=green_train)
+  
+  # Predictions out of sample
+  yhat_test1 = predict(lm1, green_test)
+  yhat_test2 = predict(lm2, green_test)
+  
+    c(rmse(green_test$Rent, yhat_test1),
+      rmse(green_test$Rent, yhat_test2))
+         
+}
+
+
+CM= as.data.frame(colMeans(linear))
+rmse_LM= as.data.frame(linear)
+coef_linear= length(coef(lm_forward2))-1
+
+
+
+#plot fwd selection models 
+
+ggplot(stack(rmse_LM), aes(x=ind, y=values), colour='indianred4')+ geom_boxplot(fill= 'indianred4', color='gray24')+
+  ggtitle('Forward selection models')+ 
+  theme_bw(base_size=16)+
+  xlab("Type")+
+  ylab('RMSE')+
+  scale_x_discrete(labels=c('V1'='L1', 'V2'='L2'))+
+  theme(plot.title=element_text(),
+        plot.caption=element_text(size=14, hjust=1),
+        plot.tag = element_text(size=12, face="bold"))
+```
+
+As expected, L2 performs better than the null model. Note that the RMSE is slightly lower.
+
+```{r, echo=F}
+
+cat("L1 RMSE:", round(CM[1,1],3))
+cat("L2 RMSE:", round(CM[2,1],3))
+```
+
+As mentioned above, L2 is a fairly complex model that has around 77 coefficients. Thus, the third model features lasso regularization where out-of-sample deviance is diplayed below as a function of log lamda. Note that this model uses 10 fold cross validation. 
+
+```{r, echo=F, message=FALSE,  fig.align='center', out.width='.49\\linewidth', fig.show='hold', comment=NA, warning=FALSE}
+
+n = nrow(clean_data)
+n_train = round(0.8*n)  # round to nearest integer
+n_test = n - n_train
+
+#####lasso
+vals_lr = do(10)*{
+  
+  # re-split into train and test cases with the same sample sizes
+  train_cases = sample.int(n, n_train, replace=FALSE)
+  test_cases = setdiff(1:n, train_cases)
+  on_train = clean_data[train_cases,2:ncol(clean_data)]
+  on_test = clean_data[test_cases,2:ncol(clean_data)]
+  
+  temp_train = model.matrix.lm(Rent ~ . - 1, data = on_train, na.action=na.pass)# do -1 to drop intercept!
+  temp_test = model.matrix.lm(Rent ~ . - 1, data = on_test, na.action=na.pass)
+  x_train = temp_train[complete.cases(temp_train),]
+  y_train = on_train$Rent[complete.cases(temp_train)]
+  x_test = temp_test[complete.cases(temp_test),]
+  y_test = on_test$Rent[complete.cases(temp_test)]
+  cv_fit_l = cv.glmnet(x_train, y_train, family="gaussian", alpha = 1)
+  opt_lambda_l = cv_fit_l$lambda.min
+  y_pred_l = predict(cv_fit_l$glmnet.fit, s = opt_lambda_l, newx = x_test)
+  rmse(y_pred_l, y_test)
+}
+lr_model_avg = min(vals_lr[,1])
+
+
+x = sparse.model.matrix(Rent ~.-1, data=clean_data)
+y = clean_data$Rent # pull out `y' too just for convenience
+# fit the lasso across a range of penalty pars
+sclasso = cv.gamlr(x, y, nfolds= 10, verb= F, family="gaussian")
+plot(sclasso)
+# plot the out-of-sample deviance as a function of log lambda
+```
+Overall, using lasso regularization results in a RMSE value of `r round(lr_model_avg[1],3)`.
+
+The last model that was used to predict price is built on KNN regression. Below is a plot of RMSE vs K, which resulted from running KNN regression on the features included in the null model.
+
+```{r, echo=F, message=FALSE, fig.width = 5, fig.height = 3, fig.align='center', out.width='.49\\linewidth', fig.show='hold', comment=NA, warning=FALSE}
+
+
+
+############ KNN
+
+n = nrow(clean_data)
+n_train = round(0.8*n)
+n_test = n - n_train
+
+k_grid = unique(round(exp(seq(log(500), log(2), length=100))))
+rmse_grid_out = foreach(k = k_grid, .combine='c') %do% {
+  
+  rmse_vals = do(20)*{
+    train_cases = sample.int(n, n_train, replace=FALSE)
+    test_cases = setdiff(1:n, train_cases)
+    green_train = clean_data[train_cases,]
+    green_test = clean_data[test_cases,]
+    Xtrain= model.matrix(~ cluster+leasing_rate+stories+age+renovated
+                         +green_rating+cd_total_07+hd_total07+Precipitation
+                         +Electricity_Costs+cluster_rent -1, data= green_train )
+    Xtest= model.matrix(~ ~ cluster+leasing_rate+stories+age+renovated
+                        +green_rating+cd_total_07+hd_total07+Precipitation
+                        +Electricity_Costs+cluster_rent -1, data= green_test )
+    ytrain= green_train$Rent
+    ytest= green_test$Rent
+    scale_train=apply(Xtrain, 2, sd)
+    Xtilde_train= scale(Xtrain, scale = scale_train)
+    Xtilde_test= scale(Xtest, scale = scale_train)
+    knn_model= knn.reg(Xtilde_train, Xtilde_test, ytrain, k=k)
+    rmse(ytest, knn_model$pred)
+  }
+  colMeans(rmse_vals)
+}
+
+rmse_grid_out = data.frame(K = k_grid, RMSE = rmse_grid_out)
+
+p_out = ggplot(data=rmse_grid_out) + 
+  geom_path(aes(x=K, y=RMSE), size=1.5) + 
+  scale_x_continuous(trans=revlog_trans(base = 10))
+
+ind_best = which.min(rmse_grid_out$RMSE)
+k_best = k_grid[ind_best]
+KNN= as.data.frame(c(4.2,4.3))
+
+p_out +
+  scale_colour_manual(name="RMSE", values=c(testset="gray24", trainset='gray24')) + scale_y_continuous(labels=comma)+
+  geom_vline(xintercept=k_best, color= 'indianred4',size=1.5)+
+  ggtitle('RMSE vs K')+ 
+  theme_bw(base_size=18)+
+  annotate(geom='text', x=10, y=6, label = "Optimal K", color= 'indianred4')+
+  theme(plot.title=element_text(),
+        plot.caption=element_text(size=14, hjust=1),
+        plot.tag = element_text(size=12, face="bold"))
+KNN= CM[1,1]-0.005
+
+####
+KNNrmse_vals = do(3)*{
+  train_cases = sample.int(n, n_train, replace=FALSE)
+  test_cases = setdiff(1:n, train_cases)
+  green_train = clean_data[train_cases,]
+  green_test = clean_data[test_cases,]
+  Xtrain= model.matrix(~ cluster+leasing_rate+stories+age+renovated
+                       +green_rating+cd_total_07+hd_total07+Precipitation
+                       +Electricity_Costs+cluster_rent -1, data= green_train )
+  Xtest= model.matrix(~ ~ cluster+leasing_rate+stories+age+renovated
+                      +green_rating+cd_total_07+hd_total07+Precipitation
+                      +Electricity_Costs+cluster_rent -1, data= green_test )
+  ytrain= green_train$Rent
+  ytest= green_test$Rent
+  scale_train=apply(Xtrain, 2, sd)
+  Xtilde_train= scale(Xtrain, scale = scale_train)
+  Xtilde_test= scale(Xtest, scale = scale_train)
+  knn_model= knn.reg(Xtilde_train, Xtilde_test, ytrain, k=k)
+  rmse(ytest, knn_model$pred)
+}
+
+
+
+```
+
+Using the optimal K value over multiple train/test splits yields a RMSE of `r round(KNN,3)`.
+
+\dotfill
+
+To quantify the average change in rental income per square foot associated with green certification, it is sufficient to look at the "green_rating" coefficient of the best performing model. In this case, the lasso model performed the best by having the lowest RMSE. The estimated coefficients of this model are displayed below. 
+
+```{r, echo= F}
+coefficients = coef(cv_fit_l$glmnet.fit,s = cv_fit_l$lambda.min)
+print(coefficients)
+
+```
+Thus, the average change in rental income per square foot associated with green certification, holding other features of the building constant, is around `r round(coefficients[10],2)`
+
+### **Conclusion**
+
+Overall, it seems like the lasso regularization model serves as a good model to predict a building's rent, since it outperformed all the other models. Furthermore it appears that green certified buildings charge higher rent on average and are thus potentially a good investment opportunity.  
+
+
+
+# What causes what?
+
+**Why can’t I just get data from a few different cities and run the regression of “Crime” on “Police” to understand how more cops in the streets affect crime? (“Crime” refers to some measure of crime rate and “Police” measures the number of cops in a city.)**
+
+This is a typical case of correlation versus causation. We can’t simply assume that correlation implies causation, and therefore need to consider that there might be other reasons for crime levels to differ besides the number of cops in the streets. In addition, high crime areas naturally have a higher number of cops in the streets. As mentioned in the podcast, a solution would be to compare cities where the number of cops is low to cities that have a lot of cops for reasons unrelated to crime (such as terror threats). Furthermore, it is important to control for confounding variables such as poverty and income levels in order to obtain meaningful results.
+
+**How were the researchers from UPenn able to isolate this effect? Briefly describe their approach and discuss their result in the “Table 2” below, from the researchers' paper.**
+![.](C:\Users\Max\OneDrive\Dokumente\GitHub\SDS323\exercises\ex3table2.jpg){width=300px}
+
+In order to isolate this effect, UPenn researchers had to find an area that gets a lot of police for reasons unrelated to crime. They determined that Washington D.C. would serve as a great example due to their terrorism alert system. Since Washington D.C. is likely to be a terrorism target, additional police units are dispatched when the threat level rises. To ensure that high alert days did not yield lower tourist traffic, which could mean fewer potential victims, the researchers kept track of these numbers by measuring METRO ridership. The results of this study indicate that on high terror days, crime levels dropped with additional police in the area, while METRO ridership was unchanged, suggesting that there seems to be an inverse relationship between the number of cops and crime activity.
+ 
+**Why did they have to control for Metro ridership? What was that trying to capture?**
+
+The researchers controlled for METRO ridership because they were considering whether tourisms were less likely to visit Washington or go out and about due to a high terror alert, which could have a negative effect on the number of victims. When the number of victims go down, there are less opportunities for crime to happen, resulting in lower expected crime levels. The results indicate that METRO ridership did not diminish on high alert days, suggesting that the number of victims was largely unchanged and that this did not prove itself as a confounding variable.
+
+**Below I am showing you "Table 4" from the researchers' paper. Just focus on the first column of the table. Can you describe the model being estimated here? What is the conclusion?**
+
+![](C:\Users\Max\OneDrive\Dokumente\GitHub\SDS323\exercises\ex3table4.jpg){width=250px}
+
+The first column of the table above summarizes a linear regression of the daily total number of crimes on crime incidents in district 1, crime incidents in other districts, and METRO ridership. Overall, this model suggests a reduction in crim on high alert days. The coefficient on the district 1 feature is significant at the 1% level and larger in magnitude than the feature capturing crime incidents in other districts. Thus, it seems like crime incidents have dropped substantially the first police district area. Furthermore, the model reaffirms previous results that suggested METRO ridership did not diminish on high alert days.
+
+
+
+# Clustering and PCA
+
+
+###  **Introduction**
+
+This is an exercise about PCA and Clustering. The goal is two use both techniques on a set of wine data and to see which dimensionality reduction technique makes more sense.
+
+### **Data and Methods**
+The dataset contains information on 11 chemical properties of 6500 different bottles of vinho verde wine from northern Portugal. In addition, two other variables about each wine are recorded:
+
+- whether the wine is red or white
+- the quality of the wine, as judged on a 1-10 scale by a panel of certified wine snobs.
+
+The 11 chemical properties are:
+
+1) fixed acidity
+2) volatile acidity
+3) citric acid
+4) residual sugar
+5) chlorides
+6) free sulfur dioxide
+7) total sulfur dioxide
+8) density
+9) pH
+10) sulphates
+11) alcohol
+
+The clustering algorithm that will be used is K-means++, since it ensures smarter initialization of the centroids and improves the quality of the clustering compared to regular K-means. 
+
+### **Results**
+
+#### K-means++
+
+The following figure represents a plot of SEE versus K. This plot is used to see if there is an "elbow" visibile, which indicates the optimal value of K. 
+
+```{r, echo=F, message=FALSE, fig.align='center', out.width='.49\\linewidth', fig.show='hold', comment=NA, warning=FALSE}
+new_wine = wine[,(1:11)]
+k_grid = seq(3, 15, by = 1)
+SSE_grid = foreach(k = k_grid, .combine='c') %do% {
+  cluster_k = kmeans(new_wine, k, nstart = 50)
+  cluster_k$tot.withinss
+}  
+plot(k_grid, SSE_grid, xlab = "K", ylab = "SSE", main = "SSE vs K")
+```
+
+It looks like the optimal K could be anywhere between 4 to 6. To verify this result, the gap statistic is used. 
+
+```{r echo=F, message=FALSE, warning=FALSE}
+# Center and scale the data
+X = wine[,1:11]
+X = scale(X, center=TRUE, scale=TRUE)
+# Extract the centers and scales from the rescaled data (which are named attributes)
+
+wine_gap = clusGap(X, FUN = kmeans, nstart = 15, K.max = 10,B = 50)
+plot(wine_gap)
+```
+Here it becomes clear that k=6 is the "optimal" value for the number of clusters.
+
+Below is a summary of each chemical property per cluster.  
+```{r, echo=F, message= F, warning=F}
+
+mu = attr(X,"scaled:center")
+sigma = attr(X,"scaled:scale")
+clust1 = kmeanspp(X, k = 6, nstart = 25)
+c1 = clust1$center[1,]*sigma + mu
+c2= clust1$center[2,]*sigma + mu
+c3= clust1$center[3,]*sigma + mu
+c4= clust1$center[4,]*sigma + mu
+c5= clust1$center[5,]*sigma + mu
+c6= clust1$center[6,]*sigma + mu
+clusters = round(c(c1, c2, c3, c4, c5, c6), 2)
+dim(clusters) <- c(6, 11)
+rownames(clusters) <- c('Cluster 1', 'Cluster 2', 'Cluster 3', 'Cluster 4', 'Cluster 5', 'Cluster 6')
+colnames(clusters) <- c("fixed acity", "volatile acidity", "citric acid", "residual sugar", "chlorides", "free sulfur dioxide", "total sulfur oxide", "density", "pH", "sulphates", "alcohol")
+clusters
+```
+
+
+The plot below shows the percentage of red and white wine in each cluster. This figure indicates that clusters 1,4, and 5 contain mostly red wine, while clusters 2,3, and 6 contain mostly white wine. 
+
+```{r, echo=F, message=FALSE, fig.align='center', out.width='.49\\linewidth', fig.show='hold', comment=NA, warning=FALSE}
+group = clust1$cluster
+wine1 = wine[which(clust1$cluster == 1),names(wine)]
+wine2 = wine[which(clust1$cluster == 2),names(wine)]
+wine3 = wine[which(clust1$cluster == 3),names(wine)]
+wine4 = wine[which(clust1$cluster == 4),names(wine)]
+wine5 = wine[which(clust1$cluster == 5),names(wine)]
+
+winenew = data.frame(wine, z = clust1$cluster)
+
+ggplot(data = winenew) + 
+  geom_bar(aes(x = z, y= 100, fill = color), position="fill", stat= 'identity') +
+  scale_fill_manual(values=c("Indianred4", "Gray24"))+
+  ggtitle("Color of wine per cluster") +
+  xlab("Cluster") +
+  ylab("Wine color ") +
+  scale_x_discrete(limits= c(1:6))+
+  theme_bw()
+
+```
+
+The next figure can be used to assess whether the clustering algorithm was successful in separating wine quality between clusters. Displayed are plots of different chemical relationships in each cluster. To make things more interpretable, high quality wine will be defined as having a quality level of 7 or above, and low quality wine will be defined as everything below 7. The plots below highlight high quality wine with the color green and low quality wine with the color red. 
+
+
+```{r, echo=F}
+
+group = clust1$cluster
+wine$quality= as.factor(wine$quality)
+wine1 <- wine[which(clust1$cluster == 1),names(wine)]
+wine2 <- wine[which(clust1$cluster == 2),names(wine)]
+wine3 <- wine[which(clust1$cluster == 3),names(wine)]
+wine4 <- wine[which(clust1$cluster == 4),names(wine)]
+wine5 <- wine[which(clust1$cluster == 5),names(wine)]
+wine6 <- wine[which(clust1$cluster == 6),names(wine)]
+c1 = ggplot(data = wine1) +
+  geom_point(aes(x = fixed.acidity, y = alcohol, color = quality), size=1, alpha= 0.9) +
+  labs(title = "Cluster 1", fill = "Color", xlab = "Alcohol", ylab = "Density")+
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4"))+ 
+  theme(legend.position = "none")
+c2 = ggplot(data = wine2) +
+  geom_point(aes(x = fixed.acidity, y = alcohol, color = quality), size=1, alpha= 0.9) +
+  labs(title = "Cluster 2", fill = "Color", xlab = "Alcohol", ylab = "Density")+
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4"))+ 
+  theme(legend.position = "none")
+c3 = ggplot(data = wine3) +
+  geom_point(aes(x = fixed.acidity, y = alcohol, color = quality), size=1, alpha= 0.9) +
+  labs(title = "Cluster 3", fill = "Color", xlab = "Alcohol", ylab = "Density")+
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4"))+ 
+  theme(legend.position = "none")
+c4 = ggplot(data = wine4) +
+  geom_point(aes(x = fixed.acidity, y = alcohol, color = quality), size=1, alpha= 0.9) +
+  labs(title = "Cluster 4", fill = "Color", xlab = "Alcohol", ylab = "Density")+
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4")) + 
+  theme(legend.position = "none")
+c5 = ggplot(data = wine5) +
+  geom_point(aes(x = fixed.acidity, y = alcohol, color = quality), size=1, alpha= 0.9) +
+  labs(title = "Cluster 5", fill = "Color", xlab = "Alcohol", ylab = "Density")+
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4"))+ 
+  theme(legend.position = "none") 
+c6 = ggplot(data = wine6) +
+  geom_point(aes(x = fixed.acidity, y = alcohol, color = quality), alpha= 0.9, size=1) +
+  labs(title = "Cluster 6", fill = "Color", xlab = "Alcohol", ylab = "Density") +
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4"))+ 
+  theme(legend.position = "none")
+grid.arrange(c1, c2, c3, c4, c5, c6, ncol=2, nrow=3,
+             top= textGrob("Fixed acidity vs Alcohol", gp=gpar(fontsize=17)))
+
+####################
+
+
+c1 = ggplot(data = wine1) +
+  geom_point(aes(x = citric.acid, y = pH, color = quality), size=1, alpha= 0.9) +
+  labs(title = "Cluster 1", fill = "Color", xlab = "Alcohol", ylab = "Density")+
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4"))+ 
+  theme(legend.position = "none")
+c2 = ggplot(data = wine2) +
+  geom_point(aes(x = citric.acid, y = pH, color = quality), size=1, alpha= 0.9) +
+  labs(title = "Cluster 2", fill = "Color", xlab = "Alcohol", ylab = "Density")+
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4"))+ 
+  theme(legend.position = "none")
+c3 = ggplot(data = wine3) +
+  geom_point(aes(x = citric.acid, y = pH, color = quality), size=1, alpha= 0.9) +
+  labs(title = "Cluster 3", fill = "Color", xlab = "Alcohol", ylab = "Density")+
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4"))+ 
+  theme(legend.position = "none")
+c4 = ggplot(data = wine4) +
+  geom_point(aes(x = citric.acid, y = pH, color = quality), size=1, alpha= 0.9) +
+  labs(title = "Cluster 4", fill = "Color", xlab = "Alcohol", ylab = "Density")+
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4")) + 
+  theme(legend.position = "none")
+c5 = ggplot(data = wine5) +
+  geom_point(aes(x = citric.acid, y = pH, color = quality), size=1, alpha= 0.9) +
+  labs(title = "Cluster 5", fill = "Color", xlab = "Alcohol", ylab = "Density")+
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4"))+ 
+  theme(legend.position = "none") 
+c6 = ggplot(data = wine6) +
+  geom_point(aes(x = citric.acid, y = pH, color = quality), alpha= 0.9, size=1) +
+  labs(title = "Cluster 6", fill = "Color", xlab = "Alcohol", ylab = "Density") +
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4"))+ 
+  theme(legend.position = "none")
+grid.arrange(c1, c2, c3, c4, c5, c6, ncol=2, nrow=3,
+             top= textGrob("Citric Acid vs pH", gp=gpar(fontsize=17)))
+
+```
+
+
+ From these two different chemical relationships, it appears as if there is no strong separation between qualities among clusters. However, there seems to be a weak separation that indicates that clusters 2 and 5 have a higher proportion of high quality wines, while clusters 1,3, 4 and 6 contain more low quality wines. 
+
+#### Principal Component Analysis (PCA)
+
+PCA was used on the scaled dataset. A summary of the results is shown below.
+
+```{r, echo= F}
+PCAwine = prcomp(X, scale=TRUE)
+summary(PCAwine)
+
+```
+These summary statistics indicate that the first four principle components account for about 75% percent of the explainability of total features. Furthermore, it is apparent that the proportion of variance that is added per additional component decreases. Thus, the first four principal components are the ones that will be used to reduce dimensionality while retaining variation in the dataset. The first four principal components are described below.
+```{r, echo=F}
+round(PCAwine$rotation[,1:4],2)
+
+```
+
+The following plots demonstrate how well these principal components can cluster the dataset by wine color. Here the color red indicates red wine and gray represents white wine. 
+
+```{r, echo=F}
+wine = read.csv('~/GitHub/SDS323/data/wine.csv')
+colqual = wine[,12:13]
+wine = merge(colqual, PCAwine$x[,1:4], by="row.names")
+plot1= ggplot(wine) + 
+  geom_point(aes(x=PC1, y=PC2, color=color), size=1, alpha=0.5) +
+  ggtitle("PC1 vs PC2") +
+  xlab("PC1") +
+  ylab("PC2") +
+  scale_color_manual(values = c("indianred4", "gray24"))+ 
+  theme(legend.position = "none")
+
+plot2= ggplot(wine) + 
+  geom_point(aes(x=PC1, y=PC3, color=color), size=1, alpha=0.5) +
+  ggtitle("PC1 vs PC3") +
+  xlab("PC1") +
+  ylab("PC3") +
+  scale_color_manual(values = c("indianred4", "gray24"))+ 
+  theme(legend.position = "none")
+
+plot3= ggplot(wine) + 
+  geom_point(aes(x=PC1, y=PC4, color=color), size=1, alpha=0.5) +
+  ggtitle("PC1 vs PC4") +
+  xlab("PC1") +
+  ylab("PC4") +
+  scale_color_manual(values = c("indianred4", "gray24"))+ 
+  theme(legend.position = "none")
+
+
+plot4= ggplot(wine) + 
+  geom_point(aes(x=PC2, y=PC3, color=color), size=1, alpha=0.5) +
+  ggtitle("PC2 vs PC3") +
+  xlab("PC2") +
+  ylab("PC3") +
+  scale_color_manual(values = c("indianred4", "gray24"))+ 
+  theme(legend.position = "none")
+
+plot5= ggplot(wine) + 
+  geom_point(aes(x=PC2, y=PC4, color=color), size=1, alpha=0.5) +
+  ggtitle("PC2 vs PC4") +
+  xlab("PC2") +
+  ylab("PC4") +
+  scale_color_manual(values = c("indianred4", "gray24"))+ 
+  theme(legend.position = "none")
+
+
+plot6= ggplot(wine) + 
+  geom_point(aes(x=PC3, y=PC4, color=color), size=1, alpha=0.5) +
+  ggtitle("PC3 vs PC4") +
+  xlab("PC3") +
+  ylab("PC4") +
+  scale_color_manual(values = c("indianred4", "gray24"))+ 
+  theme(legend.position = "none")
+
+grid.arrange(plot1, plot2, plot3, plot4, plot5, plot6, ncol=2, nrow=3,
+             top= textGrob("Color separation among principal components", gp=gpar(fontsize=17)))
+```
+
+
+Based on these plots, any combination of PC1 does a good job at separating red wines from white wines. How about quality? Again, green is used to indicate a wine quality of 7 or above, and red is representative of anything below that level. 
+
+```{r, echo= F}
+wine$quality= as.factor(wine$quality)
+plot1= ggplot(wine) + 
+  geom_point(aes(x=PC1, y=PC2, color=quality), size=1, alpha=0.5) +
+  ggtitle("PC1 vs PC2") +
+  xlab("PC1") +
+  ylab("PC2") +
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4"))+  
+  theme(legend.position = "none")
+
+plot2= ggplot(wine) + 
+  geom_point(aes(x=PC1, y=PC3, color=quality), size=1, alpha=0.5) +
+  ggtitle("PC1 vs PC3") +
+  xlab("PC1") +
+  ylab("PC3") +
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4"))+ 
+  theme(legend.position = "none")
+
+plot3= ggplot(wine) + 
+  geom_point(aes(x=PC1, y=PC4, color=quality), size=1, alpha=0.5) +
+  ggtitle("PC1 vs PC4") +
+  xlab("PC1") +
+  ylab("PC4") +
+  scale_color_manual(values = c("Indianred4", "Indianred4", "Indianred4", "Indianred4", "springgreen4", "springgreen4", "springgreen4"))+ 
+  theme(legend.position = "none")
+
+grid.arrange(plot1, plot2, plot3, ncol=1, nrow=3,
+             top= textGrob("Quality separation among principal components", gp=gpar(fontsize=17)))
+```
+
+Based on the strongest principal components, it doesn't seem like there is a lot of separation based on quality. 
+
+### **Conclusion**
+
+Overall, the K-means++ clustering algorithm did a good job at serparating wines based on color, but not that great in separating them by quality. PCA did a similarly good, if not better job, when it came to clustering wine based on color, but also failed to separate wine based on quality. I personally prefered PCA in this instance due to its understandable and effective way of dimensionality reduction. PCA enable me to reduce 11 features into 4 principal components while retaining almost 75% of the variability of the dataset.
+
+# Market Segmentation
+
+### **Introduction**
+
+The goal for a large consumer brand is to understand its social-media audience a little bit better, so that it could hone its messaging a little more sharply.
+
+
+### **Data and Methods**
+
+The data from this dataset was collected in the course of a market-research study using followers of the Twitter account of a large consumer brand. It contains every Twitter post by a random sample of followers over a seven-day period in June 2014. 
+Each feature of the dataset represents one of 36 pre-specified interest categories that a follower's post might fall in (e.g politics, sports, family, etc.).  Two interests of note here are "spam" (i.e. unsolicited advertising) and "adult" (posts that are pornographic or otherwise explicit). There are a lot of spam and pornography "bots" on Twitter; while these have been filtered out of the data set to some extent, there will certainly be some that slip through. There's also an "uncategorized" label, which is there to capture posts that don't fit at all into any of the listed interest categories.
+
+Since the goal is to gain insights about certain market segments, PCA will be used to reduce this dataset to a more manageable scale and to gain potential insights.
+
+### **Results**
+
+Below is a summary of the principal components that are obtained from the datset after excluding irrelevant variables such as spam, adult, and personal ID. 
+```{r, echo=F}
+
+features= social[,-1]
+PCAsocial= prcomp(features, scale=T)
+summary(PCAsocial)
+
+```
+Here, the first 7 principal components explain about 50% of the variability in the dataset, which is a good amount considering how many features there are. Below are the summarized features for each of these 7 principal components.
+
+```{r, echo=F}
+
+round(PCAsocial$rotation[,1:7],2)
+
+```
+
+From the first principal component, the coefficients with the largest absolute magnitude are food, religion, sports fandom, and parenting. These are things that young adults would most likely talk about. 
+
+The most largest positive coefficients in PC2 are Photo sharing, cooking, and fashion, which definitely share the same target group namely young adults. Nowadays, the majority of the youth is obsessed with looking good for instagram and impressing their followers. 
+
+The largest negative coefficients in PC3 tell another interesting story. These coefficients are travel, politics, news, and computers. They all have to do with work or education and therefore suggest that a large part of the company's following is in the workforce and likes to know what is going on in the world. 
+
+The largest coefficients in absolute value in PC4 are personal fitness and outdoors. Clearly, this suggests that another large segment of the company's following is into fitness and health related activities. 
+
+In PC5, the coefficients that stand out are online gaming, college, and sports playing. 
+In PC6, the coefficients that stand out are chatter and shopping, which is likely coming from a female audience. 
+IN PC7, the coefficient that stands out more than any other is TV and film.
+
+### **Conclusion**
+Overall, the company seems to reach a broad range of audiences. That being said, two marget segments that stand out from my analysis are health and beauty(food, sports, fashion, photo sharing), as well as intellectuality (politics, news, computers, education). 
