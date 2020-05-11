@@ -1,0 +1,338 @@
+---
+title: "Determinants of property crime rates"
+author: "Max Kutschinski"
+date: "4/21/2020"
+output: pdf_document
+theme: flatly
+header-includes:
+    - \usepackage{setspace}\doublespacing
+---
+
+
+<style type="text/css">
+
+body{ /* Normal  */
+      font-size: 12px;
+  }
+td {  /* Table  */
+  font-size: 12px;
+}
+h1.title {
+  font-size: 36px;
+  color: #8b3a3a;
+}
+h1 { /* Header 1 */
+  font-size: 26px;
+  color: #3d3d3d;
+}
+h2 { /* Header 2 */
+    font-size: 20px;
+  color: #3d3d3d;
+}
+h3 { /* Header 3 */
+  font-size: 16px;
+  color: #3d3d3d;
+}
+h4 { /* Header 4 */
+  font-size: 14px;
+  color: #3d3d3d;
+}
+code.r{ /* Code block */
+    font-size: 12px;
+}
+pre { /* Code block - determines code spacing between lines */
+    font-size: 14px;
+}
+</style>
+
+
+```{r setup, include=FALSE, comment=NA}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+MinwageData= read.csv("~/GitHub/SDS323/Project/MinwageData.csv")
+MinwageData = MinwageData[-52,]
+
+library(knitr)
+library(ggplot2)
+library(foreach)
+library(mosaic)
+library(FNN)
+library(glmnet)
+library(tidyverse)
+library(dplyr)
+library(gamlr)
+
+
+```
+
+```{r, echo=F, message=FALSE, comment=NA, warning=FALSE}
+################ functions
+rmse = function(y, yhat) {
+  sqrt(mean((y - yhat)^2, na.rm=TRUE))
+}
+
+
+revlog_trans <- function(base = exp(1)) {
+  require(scales)
+  trans <- function(x){
+    -log(x, base)
+  }
+  inv <- function(x){
+    base^(-x)
+  }
+  scales::trans_new(paste("revlog-", base, sep = ""),
+                    trans,
+                    inv,  
+                    log_breaks(base = base), 
+                    domain = c(1e-100, Inf) 
+  )
+}
+
+############################# end functions
+
+##lasso 
+
+#####lasso
+n = nrow(MinwageData)
+n_train = round(0.8*n)
+n_test = n - n_train
+
+MinwageData1= MinwageData[,c(-13,-1)]
+vals_lr = do(100)*{
+  
+  # re-split into train and test cases with the same sample sizes
+  train_cases = sample.int(n, n_train, replace=FALSE)
+  test_cases = setdiff(1:n, train_cases)
+  on_train = MinwageData1[train_cases,1:ncol(MinwageData1)]
+  on_test = MinwageData1[test_cases,1:ncol(MinwageData1)]
+  
+  temp_train = model.matrix.lm(Property.Crime ~ . - 1, data = on_train, na.action=na.pass)# do -1 to drop intercept!
+  temp_test = model.matrix.lm(Property.Crime ~ . - 1, data = on_test, na.action=na.pass)
+  x_train = temp_train[complete.cases(temp_train),]
+  y_train = on_train$Property.Crime[complete.cases(temp_train)]
+  x_test = temp_test[complete.cases(temp_test),]
+  y_test = on_test$Property.Crime[complete.cases(temp_test)]
+  cv_fit_l = cv.glmnet(x_train, y_train, family="gaussian", alpha = 1)
+  opt_lambda_l = cv_fit_l$lambda.min
+  y_pred_l = predict(cv_fit_l$glmnet.fit, s = opt_lambda_l, newx = x_test)
+  rmse(y_pred_l, y_test)
+}
+lr_model_avg = min(vals_lr[,1])
+```
+
+
+###  **Abstract**
+
+Crime rates are an important element to consider when policymakers make decisions. Yet, there still seems to be uncertainty around which factors cause an increase in crime rates in some regions as opposed to others. In particular, the connection between minimum wage and crime rates has been getting a lot of attention recently. Utilizing 2014 publicly available state-level data, this study uses three different models to estimate property crime rates by controlling for minimum wage, income, labor force participation, region, and education. One model uses simple linear regression and serves as a baseline model, and the other two models are built using KNN and lasso regression. The lasso regression model performs the best (RMSE of `r round(lr_model_avg[1],3)`) and suggests that there is no relationship between minimum wage and property crime rates. Although this study did not find evidence for a relationship between minimum wage and property crime rates, it encourages further research into the effects on violent crime rates, so that inferences about crime rates in general can be made. 
+
+
+###  **Introduction**
+
+While there already exists a general consensus on what factors cause an increase in crime rates in some regions as opposed to others, there still remain some unanswered questions regarding the magnitude of their effect. Furthermore, there are factors such as the minimum wage, where the effect on crime rates is controversial. 
+
+In recent years, there seems to have been an increasing demand for higher minimum wages. For instance, the Raise the Wage Act of 2019 plans on gradually increasing the federal minimum wage from $7.25 to $15 by 2025. This would effectively give up to 33 million Americans a raise, while promising to boost the economy and to lift workers out of poverty (Cooper 2019). Furthermore, the white house council of economic advisors published a report under the Executive Office of the President (EOP) in April of 2016, stating that a higher minimum wage would result in reduced criminal activity, assuming that the opportunity cost of crime would rise. Specifically, they found that raising the minimum wage to $12 by 2020 would result in a 3 to 5 percent decrease in crime and a societal benefit of $8 to $17 billion (EOP 2016). This would dramatically increase efficiency, as the current tools of fighting crime are mostly limited to increasing incarceration and police force, which is expensive. 
+
+On the other side, the Raise the Wage Act of 2019 might not be such as good idea after all and one could argue that raising the minimum wage has potential negative implications. Advocates of increasing the minimum wages to help alleviate poverty make the mistake of equating the minimum wage workers with the working poor. Minimum wage workers are for the most part young adults and teenagers, whose families do not live in poverty, which means that they would be the main group affected by the change (Wolla 2014). Furthermore, economic theory predicts that raising the minimum wages will significantly reduce low-skilled employment, since firms will have to adjust for paying higher rates. This loss of jobs or hours could incentivize more property crime for economic reasons and more violent crime for emotional reasons. (Fone et al, 2019). Besides unemployment, recent literature suggests a positive correlation to criminal activity instead of a negative one. It was found that increasing the minimum wage could lead to higher criminal activity, specifically for younger individuals (Fone et al. 2019).
+
+Policymakers could greatly benefit from these details by being able to make better decisions and by knowing which areas to prioritize over others. In an effort to reduce crime rates and help vulnerable workers, governments need get a clearer picture of its causes. The goal of this study is to clarify which factors actually cause crime rates to move up or down, with a focus on the minimum wage, by estimating the best possible model for predicting crime rates.
+
+
+###  **Methods**
+
+This study is based on 2014 publicly available state-level data. 
+Crime rates were reported by the Uniform Crime Reporting Statistics. This program collects statistics on the number of offenses known to law enforcement and makes several distinctions in crime categories. The major distinction is between violent and non-violent crimes. Non-violent crimes such as property crime are measured in terms of economic damage or loss to the victim, while violent crimes deal with physical harm caused to the victim. This study investigates the determinants of property crime rates exclusively. More information about the Uniform Crime Reporting Program is available at https://www.ucrdatatool.gov/.
+
+Data such as educational attainment, income, race, and LFP come from The American Community Survey (ACS), which is an ongoing survey by the U.S. Bureau of the Census, which is responsible for producing data about the American people and economy. Information about the ACS is available at https://www.census.gov/programs-surveys/acs/about.html.
+
+Lastly, minimum wage data are provided by the U.S. department of Labor, and reflect the minimum wage rates per state. In some states these rates depend on factors such as size of the employer or amount of sales. In these cases, the highest reported minimum wage rate was used. More information about the department of Labor is available at https://www.dol.gov/whd/state/stateMinWageHis.htm.
+
+\dotfill
+
+The analysis of this dataset is comprised of three different models. The first model, which serves as the baseline model, is a simple linear model that controls for the most commonly associated determinants of crime rates, such as income, race, labor force participation, region, and education, as well as a feature variable for minimum wage. 
+The second model uses the same features, but is built using a K-nearest-neighbor (KNN) algorithm. Before running KNN regression, all variables were standardized to ensure that a one unit change in one feature can be compared to a one unit change in another. 
+The last model is also a linear model, but it is built using lasso regression.
+The performance of each model will be compared using the models' RMSE. In order to minimize the error due to random variation that arises from the particular choice of points in each train/test split, the models will be compared using their average out-of-sample RMSE over 100 different train/test splits. 
+
+Table 1 summarizes the data used in this study and indicates that across all states, property crime rates range from 1.52% in Vermont to 5.18% in the District of Columbia, while the average lies around 2.6%. Minimum wages range from 5.15$ to 9.5$ across the nation with average of about 7.56$.
+
+\pagebreak
+
+
+**Table 1. Descriptive Statistics**
+
+![](C:\Users\Max\OneDrive\Dokumente\GitHub\SDS323\Project\Descriptives.jpg){width=300px}
+
+
+```{r, include= F}
+#comment: Table 1 was created per hand with word for better formatting.
+
+```
+
+###  **Results**
+
+
+
+
+
+
+```{r, echo=F, include=F, fig.width = 7, fig.height = 5, fig.align='left', comment=NA, warning=FALSE}
+
+
+
+
+rmse_vals = do(100)*{
+  train_cases = sample.int(n, n_train, replace=FALSE)
+  test_cases = setdiff(1:n, train_cases)
+  minwage_train = MinwageData[train_cases,]
+  minwage_test = MinwageData[test_cases,]
+  
+  # Fit to the training data
+  
+  lmp= lm(Property.Crime ~ Minimum.Wage + Median.annual.income + LFP..16.and.over. + West + South + Midwest + Bachelors.or.higher +
+            Pct.White, data=minwage_train )
+  
+  
+  # Predictions out of sample
+  yhat_test2 = predict(lmp, minwage_test)
+  
+
+    rmse(minwage_test$Property.Crime, yhat_test2)
+}
+CM= as.data.frame(colMeans(rmse_vals))
+rmse_LM= as.data.frame(rmse_vals)
+mean_old= format(round(CM[1,], 0), scientific=F, big.mark= ",")
+mean_new= format(round(CM[2,], 0), scientific=F, big.mark= ",")
+
+#####################
+knn 
+#################
+
+#### Property
+
+k_grid = unique(round(exp(seq(log(41), log(2), length=100))))
+rmse_grid_out = foreach(k = k_grid, .combine='c') %do% {
+  
+  rmse_vals2 = do(100)*{
+    train_cases = sample.int(n, n_train, replace=FALSE)
+    test_cases = setdiff(1:n, train_cases)
+    minwage_train = MinwageData[train_cases,]
+    minwage_test = MinwageData[test_cases,]
+    Xtrain= model.matrix(~ Minimum.Wage + Median.annual.income + LFP..16.and.over. + West + South + Midwest + Bachelors.or.higher +
+                           Pct.White + -1, data= minwage_train )
+    Xtest= model.matrix(~ Minimum.Wage + Median.annual.income + LFP..16.and.over. + West + South + Midwest + Bachelors.or.higher +
+                          Pct.White + -1, data= minwage_test )
+    ytrain= minwage_train$Property.Crime
+    ytest= minwage_test$Property.Crime
+    scale_train=apply(Xtrain, 2, sd)
+    Xtilde_train= scale(Xtrain, scale = scale_train)
+    Xtilde_test= scale(Xtest, scale = scale_train)
+    knn_model= knn.reg(Xtilde_train, Xtilde_test, ytrain, k=k)
+    rmse(ytest, knn_model$pred)
+  }
+  colMeans(rmse_vals2)
+}
+rmse_grid_out = data.frame(K = k_grid, RMSE = rmse_grid_out)
+p_out = ggplot(data=rmse_grid_out) + 
+  geom_path(aes(x=K, y=RMSE), size=1.5) + 
+  scale_x_continuous(trans=revlog_trans(base = 10))
+ind_best = which.min(rmse_grid_out$RMSE)
+k_best = k_grid[ind_best]
+```
+
+
+Figure 1 deals with the KNN model and demonstrates the RMSE for all possible K values. This figure also highlights the optimal value of K, that is the value that minimizes the RMSE. According to this plot, the optimal K value is at K equal to `r k_best`.
+
+**Figure 1**
+```{r, echo = F, message=F, error=F, results=F, fig.width = 5, fig.height = 3, fig.align='left'}
+p_out +
+  scale_colour_manual(name="RMSE", values=c(testset="gray24", trainset='gray24')) + scale_y_continuous(labels=comma)+
+  geom_vline(xintercept= k_best, color= 'indianred4',size=1.5)+
+  ggtitle('RMSE vs K')+ 
+  theme_bw(base_size=10)
+newdata= merge(rmse_LM, rmse_vals)
+newdata1= cbind(newdata, rmse_vals2)
+```
+
+Figure 2 compares the KNN model to the baseline linear model by showing their respective RMSE values. The results suggest that the average RMSE for the linear model is `r round(mean(newdata1[,1]),3)` and `r round(mean(newdata1[,2]),3)` for the KNN model.`
+
+**Figure 2**
+```{r, echo= F, fig.width = 5, fig.height = 3, fig.align='left'}
+###
+
+
+ggplot(stack(newdata1), aes(x=ind, y=values))+ geom_boxplot(fill=c("indianred4", "gray24"))+
+  ggtitle('Performance Comparison')+ 
+  theme_bw(base_size=10)+
+  xlab("Model Type")+
+  ylab('RMSE')+
+  scale_x_discrete(labels=c('result'='Linear', 'result.1'='KNN'))
+
+```
+
+
+
+```{r, echo= F, fig.width = 5, fig.height = 3, fig.align='left'}
+####
+
+
+```
+
+Figures 3 and 4 illustrate the results of the lasso regression model. Figure 3 displays out-of-sample deviance as a function of log lambda, and figure 4 highlights the resulting coefficients.
+Overall, the lasso regularization results in a RMSE value of `r round(lr_model_avg[1],3)`.
+
+**Figure 3**
+```{r, echo= F, fig.width = 5, fig.height = 3, fig.align='left'}
+x = sparse.model.matrix(Property.Crime ~.-1, data=MinwageData1)
+y = MinwageData1$Property.Crime # pull out `y' too just for convenience
+# fit the lasso across a range of penalty pars
+sclasso = cv.gamlr(x, y, nfolds= 10, verb= F, family="gaussian")
+plot(sclasso)
+```
+
+\pagebreak
+
+
+**Figure 4**
+```{r, echo= F, fig.width = 5, fig.height = 3, fig.align='left'}
+
+coefficients = coef(cv_fit_l$glmnet.fit,s = cv_fit_l$lambda.min)
+print(coefficients)
+
+
+
+```
+
+
+
+
+
+```{r, echo=F, fig.width = 5, fig.height = 3, fig.align='center', out.width='.49\\linewidth', fig.show='hold', comment=NA, warning=FALSE}
+
+
+
+```
+
+###  **Conclusion**
+
+The results of this study indicate that the KNN model and the simple linear model performed pretty similar, but the lasso regression performed the best with a RMSE that is about half that of the other two models. Using this model, it appears like many of the features are not very significant when predicting property crime rates. This model also suggests that the minimum wage does not have an effect on property crime rates. 
+
+These results make sense from an economic, as well as intuitive stand point. Basic principles of supply and demand suggest that higher wages will result in lower employment levels. Unemployment in turn is shown to be positively correlated with property and violent crime rates (Anjimotokin et al. 2015). On the other side, lower wages will result in lower purchasing power for employees, which can have the same effect on crime rates (Wolla 2014). 
+Furthermore, it is worth noting that a majority of people affected by the minimum wage are teenagers and college students that don’t come from a low-income background. If the goal for policymakers is to target poor families, then other ways such as EITC programs might prove to be more efficient not only by making those families better off financially, but also by reducing crime rates.
+
+
+###  **References**
+
+Anjimotokin S, et al. 2015. The Effects of Unemployment on Crime Rates in the U.S. Georgia Tech University Working Papers 1853
+
+Cooper D. 2019. Raising the federal minimum wage to $15 by 2025 would lift wages for over 33 million workers. Available at: https://www.epi.org/publication/minimum-wage-15-by-2025/
+
+Executive Office of the President. 2016. Raising the Minimum Wage: A Progress Update. Available at: https://obamawhitehouse.archives.gov/sites/default/files/minimum_wage/6_october_2016_min_wage_report-final.pdf
+
+Fone Z, Sabia J, Cesur R. 2019. Do Minimum Wage Increases Reduce Crime? NBER Working Papers 25647.
+U.S Department of Labor. Changes in Basic Minimum Wages In Non-Farm Employment Under State Law. Available at: https://www.dol.gov/whd/state/stateMinWageHis.htm
+
+Wolla S. 2014. Would Increasing the Minimum Wage Reduce Poverty? Available at: https://files.stlouisfed.org/research/pageone-economics/uploads/newsletter/2014/PageOne0314.pdf
+
